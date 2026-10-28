@@ -78,6 +78,31 @@ import Foundation
         try Data(atom(Array("ftyp".utf8),Array("M4A ".utf8)+[0,0,0,0])+atom(Array("moov".utf8),atom(Array("udta".utf8),meta))).write(to:m4a)
         check(NativeTags.read(m4a).lyrics.first?.1.contains("MP4 test")==true,"M4A native lyrics without external libraries")
         // Timing interpolation: pause, stale anchors, duration clamping.
+        var clock=PlaybackClock()
+        var sample=PlaybackSnapshot(capturedAt:100,playing:true,rate:1,title:"Clock",duration:300,position:10)
+        clock.update(sample,now:100)
+        var previousPosition=clock.elapsed(now:100)
+        for index in 1...30 {
+            let now=100+Double(index)*0.35
+            sample.capturedAt=now
+            sample.position=10+now-100-(index.isMultiple(of:2) ? 0.55 : 0)
+            let before=clock.elapsed(now:now)
+            check(!clock.update(sample,now:now),"subsecond media correction is not a seek")
+            let after=clock.elapsed(now:now)
+            check(after>=before && after>=previousPosition,"jittering media snapshots cannot rewind lyric progress")
+            previousPosition=after
+        }
+        check(abs(clock.elapsed(now:110.5)-20.5)<0.75,"smoothed lyric clock remains close to media time")
+        sample.capturedAt=111;sample.position=5
+        check(clock.update(sample,now:111) && clock.elapsed(now:111)==5,"real backward seek aligns immediately")
+        sample.capturedAt=112;sample.position=50
+        check(clock.update(sample,now:112) && clock.elapsed(now:112)==50,"real forward seek aligns immediately")
+        sample.capturedAt=113;sample.playing=false;sample.position=51
+        clock.update(sample,now:113)
+        check(clock.elapsed(now:115)==51,"smoothed clock freezes immediately on pause")
+        sample.capturedAt=115;sample.playing=true;sample.rate=2
+        clock.update(sample,now:115)
+        check(clock.elapsed(now:116)==53,"resuming honors changed playback speed")
         var snap=PlaybackSnapshot(capturedAt:100,playing:true,rate:1,position:10)
         check(snap.elapsed(now:101)==11,"playing clock interpolates")
         check(snap.elapsed(now:200)==13,"stale samples cannot extrapolate forever")

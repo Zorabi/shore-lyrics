@@ -162,8 +162,11 @@ struct SettingsView:View {
             }
             card{
                 VStack(alignment:.leading,spacing:12){
-                    HStack{Toggle("在线补充歌词",isOn:$model.online).toggleStyle(.switch);Spacer();Button("刷新在线匹配"){model.refreshLyrics(preferOnline:true)}.disabled(!model.online || model.isLoadingLyrics)}
-                    Text("自动补充在本地没有歌词时查询；点击“刷新在线匹配”会主动重新查询。只向 LRCLIB 发送歌名、歌手、专辑与时长，对方可见网络来源 IP。不会发送文件路径、音频内容或账号信息。").font(.system(size:12)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
+                    HStack{Toggle("在线补充歌词",isOn:$model.online).toggleStyle(.switch);Spacer();if model.isMatchingOnline{ProgressView().controlSize(.small).accessibilityLabel("正在匹配在线歌词")};Button(model.isMatchingOnline ? "重新在线匹配" : "刷新在线匹配"){model.refreshLyrics(preferOnline:true)}.disabled(!model.online).help("重新查询在线歌词；查询中点击可取消旧请求并重试")}
+                    Toggle("优先使用在线歌词",isOn:$model.preferOnlineLyrics).disabled(!model.online)
+                    Text("开启后，在线匹配成功时优先显示在线歌词；查询期间及匹配失败时使用本地歌词。关闭后仅在本地无歌词时自动查询。此选项只改变显示来源，不修改歌词或音频文件。")
+                        .font(.system(size:12)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
+                    Text("点击“刷新在线匹配”会主动重新查询。只向 LRCLIB 发送歌名、歌手、专辑与时长，对方可见网络来源 IP。不会发送文件路径、音频内容或账号信息。").font(.system(size:12)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
                 }
             }
             HStack{Button("为当前歌曲手动选择文件"){model.chooseFile()}.disabled(model.snapshot == nil);Button("恢复自动匹配"){model.clearManual()}.disabled(model.snapshot == nil)}
