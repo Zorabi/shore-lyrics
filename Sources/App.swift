@@ -121,17 +121,40 @@ final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
     }
     private func configureMenu(){
         let main=NSMenu(),appItem=NSMenuItem(),appMenu=NSMenu(title:"岸词")
+        appMenu.addItem(withTitle:"关于岸词",action:#selector(NSApplication.orderFrontStandardAboutPanel(_:)),keyEquivalent:"")
+        appMenu.addItem(.separator())
         let settings=NSMenuItem(title:"岸词设置…",action:#selector(showSettings),keyEquivalent:",");settings.target=self;appMenu.addItem(settings)
         let refresh=NSMenuItem(title:"刷新歌词",action:#selector(refreshLyrics),keyEquivalent:"r");refresh.target=self;appMenu.addItem(refresh)
+        appMenu.addItem(.separator())
+        let services=NSMenuItem(title:"服务",action:nil,keyEquivalent:"")
+        let servicesMenu=NSMenu(title:"服务");services.submenu=servicesMenu;appMenu.addItem(services);NSApp.servicesMenu=servicesMenu
         appMenu.addItem(.separator());appMenu.addItem(withTitle:"隐藏岸词",action:#selector(NSApplication.hide(_:)),keyEquivalent:"h")
+        let hideOthers=appMenu.addItem(withTitle:"隐藏其他应用",action:#selector(NSApplication.hideOtherApplications(_:)),keyEquivalent:"h")
+        hideOthers.keyEquivalentModifierMask=[.command,.option]
+        appMenu.addItem(withTitle:"全部显示",action:#selector(NSApplication.unhideAllApplications(_:)),keyEquivalent:"")
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle:"退出岸词",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q")
         appItem.submenu=appMenu;main.addItem(appItem)
+        let file=NSMenuItem(),fileMenu=NSMenu(title:"文件")
+        fileMenu.addItem(withTitle:"关闭窗口",action:#selector(NSWindow.performClose(_:)),keyEquivalent:"w")
+        file.submenu=fileMenu;main.addItem(file)
         let edit=NSMenuItem(),editMenu=NSMenu(title:"编辑")
+        editMenu.addItem(withTitle:"撤销",action:Selector(("undo:")),keyEquivalent:"z")
+        let redo=editMenu.addItem(withTitle:"重做",action:Selector(("redo:")),keyEquivalent:"z")
+        redo.keyEquivalentModifierMask=[.command,.shift]
+        editMenu.addItem(.separator())
         editMenu.addItem(withTitle:"剪切",action:#selector(NSText.cut(_:)),keyEquivalent:"x")
         editMenu.addItem(withTitle:"复制",action:#selector(NSText.copy(_:)),keyEquivalent:"c")
         editMenu.addItem(withTitle:"粘贴",action:#selector(NSText.paste(_:)),keyEquivalent:"v")
         editMenu.addItem(withTitle:"全选",action:#selector(NSText.selectAll(_:)),keyEquivalent:"a")
-        edit.submenu=editMenu;main.addItem(edit);NSApp.mainMenu=main
+        edit.submenu=editMenu;main.addItem(edit)
+        let windowItem=NSMenuItem(),windowMenu=NSMenu(title:"窗口")
+        windowMenu.addItem(withTitle:"最小化",action:#selector(NSWindow.performMiniaturize(_:)),keyEquivalent:"m")
+        windowMenu.addItem(withTitle:"缩放",action:#selector(NSWindow.performZoom(_:)),keyEquivalent:"")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle:"前置全部窗口",action:#selector(NSApplication.arrangeInFront(_:)),keyEquivalent:"")
+        windowItem.submenu=windowMenu;main.addItem(windowItem);NSApp.windowsMenu=windowMenu
+        NSApp.mainMenu=main
         status=NSStatusBar.system.statusItem(withLength:NSStatusItem.squareLength)
         status?.button?.image=NSImage(systemSymbolName:"waveform.path",accessibilityDescription:"岸词")
         status?.button?.toolTip="岸词 · 系统播放器同步歌词"

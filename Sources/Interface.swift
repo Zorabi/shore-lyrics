@@ -61,7 +61,7 @@ struct SettingsView:View {
                 Spacer()
                 VStack(alignment:.leading,spacing:7){
                     Label(model.online ? "在线匹配已开启" : "本地优先 · 在线关闭",systemImage:model.online ? "network" : "lock.shield").font(.system(size:11,weight:.medium))
-                    Text("0.2.5 · © 2026 dongx").font(.system(size:10)).foregroundColor(.secondary)
+                    Text("0.2.6 · © 2026 dongx").font(.system(size:10)).foregroundColor(.secondary)
                 }.padding(18)
             }.frame(width:178).background(Color(nsColor:.windowBackgroundColor))
             Divider()
