@@ -26,6 +26,8 @@ private final class MockLyricsHTTP:URLProtocol {
     override func startLoading(){
         Self.lock.lock();Self.requests.append(request)
         let reply=Self.replies.isEmpty ? Reply(status:404,text:"") : Self.replies.removeFirst();Self.lock.unlock()
+        if reply.status == -2 {return} // Deliberately stalled transport for timeout/cancel coverage.
+        if reply.status<0 {client?.urlProtocol(self,didFailWithError:URLError(.notConnectedToInternet));return}
         let body=try! JSONSerialization.data(withJSONObject:["syncedLyrics":reply.text])
         let response=HTTPURLResponse(url:request.url!,statusCode:reply.status,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"application/json"])!
         client?.urlProtocol(self,didReceive:response,cacheStoragePolicy:.notAllowed)
@@ -68,6 +70,81 @@ private final class MockLyricsHTTP:URLProtocol {
             let restored=AppModel(monitor:FakeMonitor(),defaults:prefs,session:session())
             defer{restored.stop()}
             check(!restored.karaokeEnabled && (prefs.array(forKey:"karaokeColor") as? [Double])?.first==1,"custom highlight color persists")
+        }
+        // Online priority overrides embedded lyrics, with local fallback and cache isolation.
+        do{
+            let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+            try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+            defer{try? FileManager.default.removeItem(at:folder)}
+            let audio=folder.appendingPathComponent("embedded.mp3")
+            let payload:[UInt8]=[3]+Array("eng".utf8)+[0]+Array("[00:01]文件内嵌歌词".utf8)
+            func big(_ n:Int)->[UInt8]{[UInt8((n>>24)&255),UInt8((n>>16)&255),UInt8((n>>8)&255),UInt8(n&255)]}
+            let frame=Array("USLT".utf8)+big(payload.count)+[0,0]+payload
+            let size=frame.count
+            let header:[UInt8]=[73,68,51,3,0,0,UInt8((size>>21)&127),UInt8((size>>14)&127),UInt8((size>>7)&127),UInt8(size&127)]
+            try Data(header+frame).write(to:audio)
+            var track=paused();track.fileURL=audio.absoluteString
+            let monitor=FakeMonitor();monitor.next=track
+            let(prefs,name)=defaults()
+            let model=AppModel(monitor:monitor,defaults:prefs,session:session(),isPlayerRunning:{_ in true})
+            defer{model.stop();prefs.removePersistentDomain(forName:name)}
+            MockLyricsHTTP.reset([])
+            model.start()
+            wait("local embedded lyrics load without network by default"){!model.isLoadingLyrics && model.mainText=="文件内嵌歌词"}
+            check(MockLyricsHTTP.count==0 && !model.preferOnlineLyrics,"online priority is opt in")
+            MockLyricsHTTP.reset([.init(status:200,text:"[00:01]网络歌词")])
+            model.preferOnlineLyrics=true
+            wait("enabling online priority replaces embedded lyrics"){!model.isLoadingLyrics && model.mainText=="网络歌词"}
+            check(MockLyricsHTTP.count==1 && prefs.bool(forKey:"preferOnlineLyrics"),"priority is persisted and ignores local document cache")
+            model.preferOnlineLyrics=false
+            wait("disabling priority restores embedded lyrics instead of online cache"){!model.isLoadingLyrics && model.mainText=="文件内嵌歌词"}
+            check(MockLyricsHTTP.count==1,"restoring local priority needs no new online request")
+            MockLyricsHTTP.reset([.init(status:404,text:"")])
+            model.preferOnlineLyrics=true
+            wait("online miss falls back to embedded lyrics"){MockLyricsHTTP.count==1 && !model.isLoadingLyrics}
+            check(model.mainText=="文件内嵌歌词" && model.matchedFile==audio,"online miss preserves local lyrics and matched file")
+            MockLyricsHTTP.reset([.init(status:500,text:"")])
+            model.reloadLyrics()
+            wait("online service failure falls back to local lyrics"){MockLyricsHTTP.count==1 && !model.isLoadingLyrics}
+            check(model.mainText=="文件内嵌歌词","server failure retains embedded lyrics")
+            MockLyricsHTTP.reset([.init(status:-1,text:"")])
+            model.reloadLyrics()
+            wait("transport failure finishes online priority lookup"){MockLyricsHTTP.count==1 && !model.isLoadingLyrics}
+            check(model.mainText=="文件内嵌歌词" && model.state.contains("失败"),"offline network error keeps local fallback")
+            model.online=false
+            wait("online off ignores stored online priority"){!model.isLoadingLyrics}
+            check(MockLyricsHTTP.count==1 && model.mainText=="文件内嵌歌词","online privacy switch still prevents requests")
+            let restored=AppModel(monitor:FakeMonitor(),defaults:prefs,session:session())
+            defer{restored.stop()}
+            check(restored.preferOnlineLyrics && !restored.online,"online priority persists independently of online permission")
+            let unchangedAudio=try Data(contentsOf:audio)
+            check(unchangedAudio==Data(header+frame),"online preference never modifies embedded audio")
+        }
+        do{
+            MockLyricsHTTP.reset([.init(status:200,text:"[00:01]已有网络歌词")])
+            let monitor=FakeMonitor();monitor.next=paused();let(prefs,name)=defaults()
+            let model=AppModel(monitor:monitor,defaults:prefs,session:session(),isPlayerRunning:{_ in true},onlineTimeout:0.2)
+            defer{model.stop();prefs.removePersistentDomain(forName:name)}
+            model.start()
+            wait("online document available before refresh retry"){model.mainText=="已有网络歌词" && !model.isLoadingLyrics}
+            MockLyricsHTTP.reset([.init(status:-2,text:"")])
+            model.refreshLyrics(preferOnline:true)
+            wait("online refresh starts without restarting metadata reader"){MockLyricsHTTP.count==1}
+            check(model.isMatchingOnline && model.isLoadingLyrics && monitor.refreshCount==0,"online retry has separate loading state and leaves playback connection intact")
+            check(model.mainText=="已有网络歌词","online refresh retains current lyric until new result arrives")
+            MockLyricsHTTP.reset([.init(status:200,text:"[00:01]重新匹配成功")])
+            model.refreshLyrics(preferOnline:true)
+            wait("in-flight online refresh can be canceled and retried"){!model.isMatchingOnline && !model.isLoadingLyrics && model.mainText=="重新匹配成功"}
+            MockLyricsHTTP.reset([.init(status:-2,text:"")])
+            model.refreshLyrics(preferOnline:true)
+            wait("online deadline releases loading states",timeout:1){!model.isMatchingOnline && !model.isLoadingLyrics && model.state.contains("超时")}
+            check(model.mainText=="重新匹配成功","online timeout retains previously matched lyric")
+            MockLyricsHTTP.reset([.init(status:-2,text:"")])
+            model.refreshLyrics(preferOnline:true)
+            wait("another online attempt can start after timeout"){MockLyricsHTTP.count==1}
+            model.online=false
+            wait("turning online off cancels stalled request"){!model.isMatchingOnline && !model.isLoadingLyrics}
+            check(!model.online && monitor.refreshCount==0,"online retries never restart the player metadata connection")
         }
         // A paused first lookup may fail; refreshing the unchanged song must retry.
         do{

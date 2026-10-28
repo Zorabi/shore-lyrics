@@ -25,6 +25,33 @@ struct PlaybackSnapshot: Codable {
         return (duration ?? 0)>0 ? min(duration!,result) : result
     }
 }
+/// Smooth small media-clock corrections without reversing the displayed lyric clock.
+struct PlaybackClock {
+    private var previous:PlaybackSnapshot?
+    private var anchor=0.0
+    private var capturedAt=0.0
+    private var speed=0.0
+    private var duration:Double?
+
+    func elapsed(now:Double=Date().timeIntervalSince1970)->Double {
+        let value=max(0,anchor+max(0,min(3,now-capturedAt))*speed)
+        return (duration ?? 0)>0 ? min(duration!,value) : value
+    }
+    @discardableResult mutating func update(_ snapshot:PlaybackSnapshot,now:Double=Date().timeIntervalSince1970)->Bool {
+        let target=snapshot.elapsed(now:now),predicted=elapsed(now:now)
+        let correction=target-predicted
+        let continuous=previous?.key==snapshot.key && previous?.playing==true && snapshot.playing && previous?.rate==snapshot.rate && snapshot.position != nil
+        let smooth=continuous && abs(correction)<=0.75
+        let rate=max(0,min(4,snapshot.rate))
+        anchor=smooth ? predicted : target
+        speed=snapshot.playing ? (smooth ? max(0,rate+max(-0.25,min(0.25,correction*0.5))) : rate) : 0
+        capturedAt=now;duration=snapshot.duration
+        let jumped=previous?.key != snapshot.key || (!smooth && abs(correction)>0.6)
+        previous=snapshot
+        return jumped
+    }
+}
+
 protocol PlaybackMonitoring:AnyObject {
     var onSnapshot:((PlaybackSnapshot)->Void)? {get set}
     var onStatus:((String)->Void)? {get set}

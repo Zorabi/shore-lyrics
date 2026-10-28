@@ -19,6 +19,7 @@ final class AppModel:ObservableObject {
     @Published var dockStatus="正在读取 Dock 布局…"
     @Published var dockExact=false
     @Published var dockTrusted=false
+    @Published var isMatchingOnline=false
     @Published var isLoadingLyrics=false
     @Published var snapshot:PlaybackSnapshot?
     @Published var document:LyricsDocument?
@@ -47,7 +48,13 @@ final class AppModel:ObservableObject {
     @Published var placement="dock" {didSet{defaults.set(placement,forKey:"placement")}}
     @Published var theme="glass" {didSet{defaults.set(theme,forKey:"theme")}}
     @Published var display="main" {didSet{defaults.set(display,forKey:"display")}}
-    @Published var online=false {didSet{defaults.set(online,forKey:"online");if initialized{reloadLyrics()}}}
+    @Published var online=false {didSet{defaults.set(online,forKey:"online");if initialized && oldValue != online{cache.removeAll();reloadLyrics()}}}
+    @Published var preferOnlineLyrics=false {
+        didSet {
+            defaults.set(preferOnlineLyrics,forKey:"preferOnlineLyrics")
+            if initialized && oldValue != preferOnlineLyrics{cache.removeAll();reloadLyrics()}
+        }
+    }
     @Published var previewUntil=Date.distantPast
     let library=MusicLibrary()
     private let defaults:UserDefaults
@@ -61,6 +68,9 @@ final class AppModel:ObservableObject {
     private var generation=0
     private var lastReceived=Date.distantPast
     private var onlineTask:URLSessionDataTask?
+    private var onlineDeadline:DispatchWorkItem?
+    private var playbackClock=PlaybackClock()
+    private let onlineTimeout:TimeInterval
     private var manual:[String:String]=[:]
     private var initialized=false
     private var cache:[String:LyricsDocument]=[:]
@@ -73,8 +83,8 @@ final class AppModel:ObservableObject {
         return URLSession(configuration:config,delegate:networkGuard,delegateQueue:nil)
     }()
     init(monitor:PlaybackMonitoring=NowPlayingMonitor(),defaults:UserDefaults = .standard,session:URLSession?=nil,
-         isPlayerRunning:@escaping(String)->Bool={ !NSRunningApplication.runningApplications(withBundleIdentifier:$0).isEmpty },refreshTimeout:TimeInterval=6){
-        self.monitor=monitor;self.defaults=defaults;self.suppliedSession=session;self.isPlayerRunning=isPlayerRunning;self.refreshTimeout=refreshTimeout
+         isPlayerRunning:@escaping(String)->Bool={ !NSRunningApplication.runningApplications(withBundleIdentifier:$0).isEmpty },refreshTimeout:TimeInterval=6,onlineTimeout:TimeInterval=15){
+        self.monitor=monitor;self.defaults=defaults;self.suppliedSession=session;self.isPlayerRunning=isPlayerRunning;self.refreshTimeout=refreshTimeout;self.onlineTimeout=onlineTimeout
         defaults.register(defaults:["karaokeEnabled":true,"overlayVisible":true,"hidePaused":true,"hideNearDock":true,"twoLines":true,"fontSize":22.0,"opacity":0.88,"offset":0.0,"placement":"dock","theme":"glass","display":"main","online":false])
         overlayVisible=defaults.bool(forKey:"overlayVisible");hidePaused=defaults.bool(forKey:"hidePaused");hideNearDock=defaults.bool(forKey:"hideNearDock");twoLines=defaults.bool(forKey:"twoLines")
         karaokeEnabled=defaults.bool(forKey:"karaokeEnabled")
@@ -84,6 +94,7 @@ final class AppModel:ObservableObject {
         }
         fontSize=max(16,min(34,defaults.double(forKey:"fontSize")));opacity=max(0.45,min(1,defaults.double(forKey:"opacity")));offset=max(-5,min(5,defaults.double(forKey:"offset")))
         placement=defaults.string(forKey:"placement") ?? "dock";theme=defaults.string(forKey:"theme") ?? "glass";display=defaults.string(forKey:"display") ?? "main";online=defaults.bool(forKey:"online")
+        preferOnlineLyrics=defaults.bool(forKey:"preferOnlineLyrics")
         roots=defaults.stringArray(forKey:"roots") ?? [];manual=defaults.dictionary(forKey:"manualFiles") as? [String:String] ?? [:]
         // This upgrade adds the requested Dock fusion as the initial mode.
         if !defaults.bool(forKey:"dockFusionEnabledV2") {
@@ -99,29 +110,33 @@ final class AppModel:ObservableObject {
         monitor.start()
         timer=Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){ [weak self] _ in self?.tick() }
     }
-    func stop(){pendingRefresh=nil;generation+=1;isLoadingLyrics=false;timer?.invalidate();monitor.stop();onlineTask?.cancel();session.invalidateAndCancel()}
+    private func cancelOnlineLookup(){
+        onlineDeadline?.cancel();onlineDeadline=nil
+        onlineTask?.cancel();onlineTask=nil;isMatchingOnline=false
+    }
+    func playbackPosition(at date:Date)->Double {snapshot == nil ? position : playbackClock.elapsed(now:date.timeIntervalSince1970)}
+    func stop(){pendingRefresh=nil;generation+=1;isLoadingLyrics=false;timer?.invalidate();monitor.stop();cancelOnlineLookup();session.invalidateAndCancel()}
     private func tick(){
         if Date().timeIntervalSince(lastReceived)>4,snapshot != nil {
-            generation+=1;onlineTask?.cancel();snapshot=nil;document=nil;matchedFile=nil;playerName="系统连接中断"
+            generation+=1;cancelOnlineLookup();snapshot=nil;document=nil;matchedFile=nil;playerName="系统连接中断"
             if pendingRefresh==nil{isLoadingLyrics=false;state="正在重新读取播放信息…"}
         }
-        position=snapshot?.elapsed() ?? 0
+        position=snapshot == nil ? 0 : playbackClock.elapsed()
     }
     private func accept(_ new:PlaybackSnapshot){
         lastReceived=Date()
         let bundle=new.bundle ?? ""
         guard !bundle.isEmpty,let title=new.title,!title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,new.advertisement != true,
               isPlayerRunning(bundle) else{
-            if snapshot != nil{generation+=1;onlineTask?.cancel();snapshot=nil;document=nil;matchedFile=nil}
+            if snapshot != nil{generation+=1;cancelOnlineLookup();snapshot=nil;document=nil;matchedFile=nil}
             playerName="等待播放器"
             if pendingRefresh==nil{isLoadingLyrics=false;state=new.error ?? "系统尚未提供当前歌曲信息，可点击“刷新歌词”重试"}
             return
         }
         let changed=snapshot?.key != new.key
-        let previous=snapshot
         let now=Date().timeIntervalSince1970
-        lyricJumped=previous?.key != new.key || abs((previous?.elapsed(now:now) ?? 0)-new.elapsed(now:now))>0.6
-        snapshot=new;position=new.elapsed(now:now)
+        lyricJumped=playbackClock.update(new,now:now)
+        snapshot=new;position=playbackClock.elapsed(now:now)
         playerName=NSRunningApplication.runningApplications(withBundleIdentifier:bundle).first?.localizedName ?? bundle
         let refresh=pendingRefresh
         pendingRefresh=nil
@@ -137,7 +152,7 @@ final class AppModel:ObservableObject {
     }
     func removeRoot(_ path:String){roots.removeAll{$0==path};defaults.set(roots,forKey:"roots");rescan()}
     func rescan(){
-        generation+=1;onlineTask?.cancel();cache.removeAll();libraryStatus="正在整理本地音乐文件…"
+        generation+=1;cancelOnlineLookup();cache.removeAll();libraryStatus="正在整理本地音乐文件…"
         let paths=roots,library=library
         worker.async{ [weak self] in
             let count=library.scan(paths:paths)
@@ -149,14 +164,14 @@ final class AppModel:ObservableObject {
         }
     }
     func reloadLyrics(preferOnline:Bool=false,preserveCurrent:Bool=false){
-        generation+=1;let token=generation;onlineTask?.cancel();onlineTask=nil
+        generation+=1;let token=generation;cancelOnlineLookup()
         guard let track=snapshot else{if pendingRefresh==nil{isLoadingLyrics=false};return}
         isLoadingLyrics=true
         let key=track.key
         let retainedDocument=preserveCurrent ? document : nil,retainedFile=preserveCurrent ? matchedFile : nil
         if !preserveCurrent{document=nil;matchedFile=nil}
         if preferOnline && online{fetchOnline(track,token:token,retainedDocument:retainedDocument,retainedFile:retainedFile);return}
-        if let cached=cache[key],online || !cached.source.hasPrefix("在线"){document=cached;matchedFile=cached.file;isLoadingLyrics=false;state=cached.timed ? "同步歌词已就绪" : "已读取歌词 · 无时间轴";return}
+        if let cached=cache[key],(online || !cached.source.hasPrefix("在线")), !(online && preferOnlineLyrics && !cached.source.hasPrefix("在线")){document=cached;matchedFile=cached.file;isLoadingLyrics=false;state=cached.timed ? "同步歌词已就绪" : "已读取歌词 · 无时间轴";return}
         state="正在读取本地歌词…"
         let library=library,selected=manual[key]
         worker.async { [weak self] in
@@ -173,7 +188,11 @@ final class AppModel:ObservableObject {
                 if result.document != nil || retainedDocument==nil{self.matchedFile=result.file}
                 if let doc=result.document {
                     self.document=doc;self.cache[key]=doc;self.isLoadingLyrics=false;self.state=doc.timed ? "同步歌词已就绪" : "已读取歌词 · 无时间轴"
-                    // Keep real local plain text rather than pretending it is synchronized.
+                    if self.online && self.preferOnlineLyrics {
+                        self.isLoadingLyrics=true
+                        self.fetchOnline(track,token:token,retainedDocument:doc,retainedFile:result.file)
+                    }
+                    // Keep local lyrics visible during online lookup and on failure.
                 } else if self.online {self.fetchOnline(track,token:token,retainedDocument:retainedDocument,retainedFile:retainedFile)}
                 else {self.isLoadingLyrics=false;self.state=result.message+(retainedDocument == nil ? "" : "；继续显示已有歌词")}
             }
@@ -182,7 +201,12 @@ final class AppModel:ObservableObject {
     func forceReload(){refreshLyrics()}
     func refreshLyrics(preferOnline:Bool=false){
         guard !preferOnline || online else{state="请先开启在线补充歌词";return}
-        generation+=1;onlineTask?.cancel();onlineTask=nil
+        if preferOnline,snapshot != nil {
+            pendingRefresh=nil
+            reloadLyrics(preferOnline:true,preserveCurrent:true)
+            return
+        }
+        generation+=1;cancelOnlineLookup()
         if let key=snapshot?.key{cache.removeValue(forKey:key)}
         let library=library;worker.async{library.clearCache()}
         let request=UUID()
@@ -196,7 +220,7 @@ final class AppModel:ObservableObject {
         }
     }
     private func fetchOnline(_ track:PlaybackSnapshot,token:Int,retainedDocument:LyricsDocument?=nil,retainedFile:URL?=nil){
-        guard online,let title=track.title,!title.isEmpty,let artist=track.artist,!artist.isEmpty else{isLoadingLyrics=false;state="在线匹配需要歌名与歌手";return}
+        guard online,let title=track.title,!title.isEmpty,let artist=track.artist,!artist.isEmpty else{isLoadingLyrics=false;state="在线匹配需要歌名与歌手"+(retainedDocument == nil ? "" : "；继续显示已有歌词");return}
         var parts=URLComponents(string:"https://lrclib.net/api/get")!
         var query=[URLQueryItem(name:"track_name",value:title),URLQueryItem(name:"artist_name",value:artist)]
         if let album=track.album,!album.isEmpty{query.append(URLQueryItem(name:"album_name",value:album))}
@@ -204,6 +228,16 @@ final class AppModel:ObservableObject {
         parts.queryItems=query
         var request=URLRequest(url:parts.url!);request.setValue("ShoreLyrics/0.1 (macOS)",forHTTPHeaderField:"User-Agent")
         state="正在向 LRCLIB 查询歌词…"
+        isMatchingOnline=true
+        request.timeoutInterval=min(10,onlineTimeout)
+        let deadline=DispatchWorkItem{[weak self] in
+            guard let self,self.generation==token,self.snapshot?.key==track.key,self.isMatchingOnline else{return}
+            self.generation+=1;self.cancelOnlineLookup();self.isLoadingLyrics=false
+            if let retainedDocument{self.document=retainedDocument;self.matchedFile=retainedFile;self.cache[track.key]=retainedDocument}
+            self.state="在线查询超时，请重试"+(retainedDocument == nil ? "" : "；继续显示已有歌词")
+        }
+        onlineDeadline=deadline
+        DispatchQueue.main.asyncAfter(deadline:.now()+onlineTimeout,execute:deadline)
         onlineTask=session.dataTask(with:request){ [weak self] data,response,error in
             var doc:LyricsDocument?,message="在线来源没有匹配到歌词"
             if let error{message="在线查词失败：\(error.localizedDescription)"}
@@ -215,6 +249,7 @@ final class AppModel:ObservableObject {
             }
             DispatchQueue.main.async{[weak self] in
                 guard let self,self.online,self.generation==token,self.snapshot?.key==track.key else{return}
+                self.onlineDeadline?.cancel();self.onlineDeadline=nil;self.onlineTask=nil;self.isMatchingOnline=false
                 self.isLoadingLyrics=false
                 if let doc{self.document=doc;self.matchedFile=doc.file;self.cache[track.key]=doc;self.state=doc.timed ? "同步歌词已就绪" : "已读取在线歌词 · 无时间轴"}
                 else{

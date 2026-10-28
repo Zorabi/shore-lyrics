@@ -45,7 +45,7 @@ struct KaraokeText: View {
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0/60, paused: model.snapshot?.playing != true || !model.karaokeEnabled)) { context in
-            let projected = model.snapshot?.elapsed(now:context.date.timeIntervalSince1970) ?? model.position
+            let projected = model.playbackPosition(at:context.date)
             // The model owns line changes; never apply the next line's progress to outgoing text.
             let position = model.document?.index(at:projected+model.offset) == model.currentIndex ? projected : model.position
             GlyphText(text:model.primaryLyricText, progress:model.lyricProgress(at:position),
