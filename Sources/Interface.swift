@@ -7,61 +7,21 @@ import AppKit
 private let mint=Color(red:0.49,green:0.84,blue:0.72)
 private let ink=Color(red:0.07,green:0.10,blue:0.13)
 
-// Keep the highlight inside the original text layout, including scaled and wrapped lyrics.
-private struct KaraokeText:View {
-    var text:String
-    var progress:Double?
-    var color:Color
-    var highlight:Color
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var body:some View {
-        Text(text).foregroundColor(color)
-            .overlay {
-                if let progress {
-                    Text(text).foregroundColor(highlight)
-                        .mask {
-                            GeometryReader { geometry in
-                                let edge=geometry.size.width*progress
-                                LinearGradient(stops:[
-                                    .init(color:.white,location:0),
-                                    .init(color:.white,location:max(0,progress-0.025)),
-                                    .init(color:.clear,location:progress),
-                                    .init(color:.clear,location:1)
-                                ],startPoint:.leading,endPoint:.trailing)
-                                if !reduceMotion, progress > 0, progress < 1 {
-                                    Rectangle().fill(.white).frame(width:5)
-                                        .blur(radius:4).offset(x:edge-5)
-                                }
-                            }
-                        }.accessibilityHidden(true)
-                }
-            }
-            .id(text)
-            .transition(reduceMotion ? .identity : .opacity.combined(with:.offset(y:3)))
-    }
-}
-
 struct OverlayView:View {
     @ObservedObject var model:AppModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var paper:Bool{model.theme=="paper"}
     var fused:Bool{model.placement=="dock"}
     var compact:Bool{fused || model.placement=="bottom"}
     var glass:Bool{model.theme=="glass"}
     var body:some View {
         VStack(spacing:compact ? 3 : 7){
-            KaraokeText(text:model.primaryLyricText,progress:model.lyricProgress,color:glass ? .primary : paper ? Color(red:0.12,green:0.15,blue:0.15) : .white,highlight:model.karaokeColor)
-                .font(.system(size:compact ? min(24,model.fontSize) : model.fontSize,weight:.semibold,design:.rounded))
-                .lineLimit(!compact && model.twoLines ? 2 : 1).minimumScaleFactor(0.65).multilineTextAlignment(.center)
-                .foregroundColor(glass ? .primary : paper ? Color(red:0.12,green:0.15,blue:0.15) : .white)
-                .accessibilityLabel("当前歌词：\(model.mainText)")
+            KaraokeText(model:model,color:glass ? .primary : paper ? Color(red:0.12,green:0.15,blue:0.15) : .white,fontSize:compact ? min(24,model.fontSize) : model.fontSize,rounded:true)
             if model.twoLines && !model.secondaryText.isEmpty {
                 Text(model.secondaryText.replacingOccurrences(of:"\n",with:" · "))
                     .font(.system(size:compact ? 12 : max(13,model.fontSize*0.66))).lineLimit(1).minimumScaleFactor(0.8)
                     .foregroundColor(glass ? .secondary : paper ? .black.opacity(0.65) : .white.opacity(0.7))
             }
-        }.animation(reduceMotion ? nil : .easeInOut(duration:0.24),value:model.mainText)
-            .animation(reduceMotion ? nil : .linear(duration:0.1),value:model.lyricProgress)
+        }
             .padding(.horizontal,26).frame(maxWidth:.infinity,maxHeight:.infinity)
             .background((glass ? Color.clear : paper ? Color(red:0.98,green:0.97,blue:0.93) : model.theme=="pine" ? Color(red:0.05,green:0.15,blue:0.12) : ink).opacity(model.opacity))
             .clipShape(RoundedRectangle(cornerRadius:model.placement=="bottom" ? 0 : fused ? model.dockCornerRadius : 18,style:.continuous))
@@ -135,13 +95,12 @@ struct SettingsView:View {
                 }
                 VStack(spacing:6){
                     ProgressView(value:min(1,max(0,model.position/max(1,model.snapshot?.duration ?? 1)))).tint(mint)
-                        .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .linear(duration:0.1),value:model.position)
+                        .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || model.lyricJumped || model.snapshot?.playing != true ? nil : .linear(duration:0.1),value:model.position)
                     HStack{Text(clock(model.position));Spacer();Text(clock(model.snapshot?.duration ?? 0))}.font(.system(size:10,design:.monospaced)).foregroundColor(.white.opacity(0.6))
                 }
                 Divider().overlay(.white.opacity(0.1))
-                KaraokeText(text:model.primaryLyricText,progress:model.lyricProgress,color:.white.opacity(0.85),highlight:model.karaokeColor).font(.system(size:21,weight:.medium))
-                    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .linear(duration:0.1),value:model.lyricProgress)
-                    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration:0.24),value:model.mainText).lineLimit(2).frame(maxWidth:.infinity,alignment:.center).padding(.top,2)
+                KaraokeText(model:model,color:.white.opacity(0.85),fontSize:21)
+                    .frame(maxWidth:.infinity,alignment:.center).padding(.top,2)
                 Text(model.secondaryText).font(.system(size:12)).foregroundColor(.white.opacity(0.65)).lineLimit(2).frame(maxWidth:.infinity,alignment:.center)
             }.padding(23).background(ink).cornerRadius(16)
             HStack(alignment:.center){

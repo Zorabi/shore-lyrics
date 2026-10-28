@@ -22,6 +22,7 @@ final class AppModel:ObservableObject {
     @Published var isLoadingLyrics=false
     @Published var snapshot:PlaybackSnapshot?
     @Published var document:LyricsDocument?
+    @Published var lyricJumped=false
     @Published var position:Double=0
     @Published var playerName="等待播放器"
     @Published var state="打开任意向 macOS 发布播放信息的播放器"
@@ -117,7 +118,10 @@ final class AppModel:ObservableObject {
             return
         }
         let changed=snapshot?.key != new.key
-        snapshot=new;position=new.elapsed()
+        let previous=snapshot
+        let now=Date().timeIntervalSince1970
+        lyricJumped=previous?.key != new.key || abs((previous?.elapsed(now:now) ?? 0)-new.elapsed(now:now))>0.6
+        snapshot=new;position=new.elapsed(now:now)
         playerName=NSRunningApplication.runningApplications(withBundleIdentifier:bundle).first?.localizedName ?? bundle
         let refresh=pendingRefresh
         pendingRefresh=nil
@@ -222,14 +226,16 @@ final class AppModel:ObservableObject {
         onlineTask?.resume()
     }
     var currentIndex:Int? {document?.index(at:position+offset)}
-    var lyricProgress:Double? {
-        guard karaokeEnabled, previewUntil <= Date(), let doc=document, let index=currentIndex,
+    var lyricTransitionID:String {"\(snapshot?.key ?? "")|\(currentIndex.map(String.init) ?? "none")|\(primaryLyricText)"}
+    var lyricProgress:Double? {lyricProgress(at:position)}
+    func lyricProgress(at playbackPosition:Double)->Double? {
+        guard karaokeEnabled, previewUntil <= Date(), let doc=document, let index=doc.index(at:playbackPosition+offset),
               !doc.lines[index].text.isEmpty else { return nil }
         var line=doc.lines[index]
         line.text=line.text.components(separatedBy:"\n").first ?? line.text
         line.words=line.words.filter{$0.offset<=line.text.count}
         let end=line.end ?? (index+1 < doc.lines.count ? doc.lines[index+1].time : snapshot?.duration ?? line.time)
-        return line.progress(at:position+offset,until:end)
+        return line.progress(at:playbackPosition+offset,until:end)
     }
     var mainText:String {
         if previewUntil>Date(){return "让每一句，留在眼前。"}
