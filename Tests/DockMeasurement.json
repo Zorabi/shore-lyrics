@@ -1,0 +1,22 @@
+{
+  "source": "Local Dock layout diagnostic; no screenshots or app names stored",
+  "configuredTile": 47,
+  "interactionRect": {
+    "x": 238,
+    "y": 10,
+    "width": 1324,
+    "height": 61
+  },
+  "itemSize": {
+    "width": 49,
+    "height": 61
+  },
+  "screenScale": 2,
+  "expectedVisibleRect": {
+    "x": 238,
+    "y": 5,
+    "width": 1324,
+    "height": 61
+  },
+  "expectedCornerRadius": 15
+}
