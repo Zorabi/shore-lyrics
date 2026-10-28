@@ -54,6 +54,14 @@ private final class MockLyricsHTTP:URLProtocol {
             model.position=2
             check(model.primaryLyricText=="原文" && model.secondaryText=="翻译","bilingual lyrics keep translation on uncolored secondary row")
             check(model.lyricProgress != nil,"karaoke enabled by default")
+            let identity=model.lyricTransitionID
+            check(abs((model.lyricProgress(at:2.5) ?? 0)-0.75)<0.001,"display frame projects progress without changing model position")
+            check(model.position==2,"display frame never advances paused playback state")
+            model.position=1.25
+            check(abs((model.lyricProgress ?? 0)-0.125)<0.001,"backward seek aligns immediately without interpolation")
+            model.position=3.1
+            check(model.lyricTransitionID != identity,"line identity follows timestamps for transitions")
+
             model.karaokeEnabled=false
             check(model.lyricProgress==nil && !prefs.bool(forKey:"karaokeEnabled"),"karaoke toggle disables highlight and persists")
             model.karaokeColor = .red
