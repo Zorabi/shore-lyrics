@@ -46,6 +46,21 @@ private final class MockLyricsHTTP:URLProtocol {
     static func defaults()->(UserDefaults,String){let name="local.shorelyrics.tests."+UUID().uuidString;let value=UserDefaults(suiteName:name)!;value.set(true,forKey:"online");return(value,name)}
     static func paused()->PlaybackSnapshot{PlaybackSnapshot(capturedAt:Date().timeIntervalSince1970,playing:false,rate:0,bundle:"test.thirdparty.player",title:"Refresh Song",artist:"Refresh Artist",album:"Test Album",duration:300,position:42)}
     static func main()throws{
+        do{
+            let(prefs,name)=defaults()
+            let model=AppModel(monitor:FakeMonitor(),defaults:prefs,session:session())
+            defer{model.stop();prefs.removePersistentDomain(forName:name)}
+            model.document=LyricsParser.parse("[00:01]原文\n[00:01]翻译\n[00:03]下一句",source:"test")
+            model.position=2
+            check(model.primaryLyricText=="原文" && model.secondaryText=="翻译","bilingual lyrics keep translation on uncolored secondary row")
+            check(model.lyricProgress != nil,"karaoke enabled by default")
+            model.karaokeEnabled=false
+            check(model.lyricProgress==nil && !prefs.bool(forKey:"karaokeEnabled"),"karaoke toggle disables highlight and persists")
+            model.karaokeColor = .red
+            let restored=AppModel(monitor:FakeMonitor(),defaults:prefs,session:session())
+            defer{restored.stop()}
+            check(!restored.karaokeEnabled && (prefs.array(forKey:"karaokeColor") as? [Double])?.first==1,"custom highlight color persists")
+        }
         // A paused first lookup may fail; refreshing the unchanged song must retry.
         do{
             MockLyricsHTTP.reset([.init(status:404,text:""),.init(status:200,text:"[00:01.00]刷新成功"),.init(status:200,text:"[00:02.00]再次更新"),.init(status:404,text:"")])

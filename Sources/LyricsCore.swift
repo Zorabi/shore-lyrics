@@ -3,10 +3,30 @@
 
 import Foundation
 
+struct LyricWord: Codable, Equatable {
+    var time: Double
+    var offset: Int
+}
+
 struct LyricLine: Codable, Equatable {
     var time: Double
     var text: String
     var end: Double? = nil
+    var words: [LyricWord] = []
+    func progress(at seconds: Double, until endTime: Double) -> Double {
+        guard seconds.isFinite, endTime > time, !text.isEmpty else { return 0 }
+        if seconds < time { return 0 }
+        if seconds >= endTime { return 1 }
+        guard !words.isEmpty else { return min(1,max(0,(seconds-time)/(endTime-time))) }
+        let count = Double(text.count)
+        guard let index = words.lastIndex(where: { $0.time <= seconds }) else { return 0 }
+        let word = words[index]
+        let nextTime = index+1 < words.count ? words[index+1].time : endTime
+        let nextOffset = index+1 < words.count ? words[index+1].offset : text.count
+        let fraction = nextTime > word.time ? min(1,max(0,(seconds-word.time)/(nextTime-word.time))) : 1
+        return min(1,max(0,(Double(word.offset)+Double(nextOffset-word.offset)*fraction)/count))
+    }
+
 }
 struct LyricsDocument {
     var lines: [LyricLine]
@@ -40,20 +60,33 @@ enum LyricsParser {
         let offsetRE = try! NSRegularExpression(pattern: #"(?i)\[offset:([+-]?\d+)\]"#)
         var offset = 0.0
         if let m = offsetRE.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)), let r = Range(m.range(at: 1), in: raw) { offset = (Double(raw[r]) ?? 0) / 1000 }
+        let wordStamp = try! NSRegularExpression(pattern: #"<(\d{1,3}):(\d{1,2})(?:[\.:](\d{1,3}))?>"#)
         var result: [LyricLine] = []
         for line in raw.components(separatedBy: "\n") {
             let range = NSRange(line.startIndex..., in: line)
             let matches = stamp.matches(in: line, range: range)
             guard !matches.isEmpty else { continue }
-            let cleaned = stamp.stringByReplacingMatches(in: line, range: range, withTemplate: "")
-                .replacingOccurrences(of: #"<\d{1,3}:\d{1,2}(?:\.\d{1,3})?>"#, with: "", options: .regularExpression)
+            let body = stamp.stringByReplacingMatches(in: line, range: range, withTemplate: "")
                 .trimmingCharacters(in: .whitespaces)
+            var cleaned = "", words: [LyricWord] = [], cursor = body.startIndex
+            for mark in wordStamp.matches(in: body, range: NSRange(body.startIndex..., in: body)) {
+                guard let r = Range(mark.range, in: body) else { continue }
+                cleaned += body[cursor..<r.lowerBound]
+                func value(_ i: Int) -> String { Range(mark.range(at:i), in:body).map { String(body[$0]) } ?? "" }
+                let fraction = value(3), sec = Double(value(2)) ?? 0
+                let time = (Double(value(1)) ?? 0)*60+sec+(Double(fraction) ?? 0)/pow(10,Double(fraction.count))-offset
+                if sec < 60, time >= (words.last?.time ?? -.infinity) {
+                    words.append(LyricWord(time:max(0,time),offset:cleaned.count))
+                }
+                cursor = r.upperBound
+            }
+            cleaned += body[cursor...]
             for m in matches {
                 func part(_ i: Int) -> String { Range(m.range(at: i), in: line).map { String(line[$0]) } ?? "" }
                 guard let min = Double(part(1)), let sec = Double(part(2)), sec < 60 else { continue }
                 let fraction = part(3), decimal = fraction.isEmpty ? 0 : (Double(fraction) ?? 0) / pow(10, Double(fraction.count))
                 // Positive LRC offsets advance the lyric clock.
-                result.append(LyricLine(time: max(0,min * 60 + sec + decimal - offset), text: cleaned))
+                result.append(LyricLine(time: max(0,min * 60 + sec + decimal - offset), text: cleaned, words: words))
             }
         }
         result.sort { $0.time < $1.time }
@@ -61,6 +94,7 @@ enum LyricsParser {
         for line in result {
             if let last = merged.last, abs(last.time-line.time) < 0.001 {
                 if !line.text.isEmpty && !last.text.components(separatedBy: "\n").contains(line.text) {
+                    merged[merged.count-1].words = []
                     merged[merged.count-1].text += (last.text.isEmpty ? "" : "\n") + line.text
                 }
             } else { merged.append(line) }

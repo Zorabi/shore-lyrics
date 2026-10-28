@@ -7,15 +7,50 @@ import AppKit
 private let mint=Color(red:0.49,green:0.84,blue:0.72)
 private let ink=Color(red:0.07,green:0.10,blue:0.13)
 
+// Keep the highlight inside the original text layout, including scaled and wrapped lyrics.
+private struct KaraokeText:View {
+    var text:String
+    var progress:Double?
+    var color:Color
+    var highlight:Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body:some View {
+        Text(text).foregroundColor(color)
+            .overlay {
+                if let progress {
+                    Text(text).foregroundColor(highlight)
+                        .mask {
+                            GeometryReader { geometry in
+                                let edge=geometry.size.width*progress
+                                LinearGradient(stops:[
+                                    .init(color:.white,location:0),
+                                    .init(color:.white,location:max(0,progress-0.025)),
+                                    .init(color:.clear,location:progress),
+                                    .init(color:.clear,location:1)
+                                ],startPoint:.leading,endPoint:.trailing)
+                                if !reduceMotion, progress > 0, progress < 1 {
+                                    Rectangle().fill(.white).frame(width:5)
+                                        .blur(radius:4).offset(x:edge-5)
+                                }
+                            }
+                        }.accessibilityHidden(true)
+                }
+            }
+            .id(text)
+            .transition(reduceMotion ? .identity : .opacity.combined(with:.offset(y:3)))
+    }
+}
+
 struct OverlayView:View {
     @ObservedObject var model:AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var paper:Bool{model.theme=="paper"}
     var fused:Bool{model.placement=="dock"}
     var compact:Bool{fused || model.placement=="bottom"}
     var glass:Bool{model.theme=="glass"}
     var body:some View {
         VStack(spacing:compact ? 3 : 7){
-            Text(!compact && model.twoLines ? model.mainText : model.mainText.replacingOccurrences(of:"\n",with:" · "))
+            KaraokeText(text:model.primaryLyricText,progress:model.lyricProgress,color:glass ? .primary : paper ? Color(red:0.12,green:0.15,blue:0.15) : .white,highlight:model.karaokeColor)
                 .font(.system(size:compact ? min(24,model.fontSize) : model.fontSize,weight:.semibold,design:.rounded))
                 .lineLimit(!compact && model.twoLines ? 2 : 1).minimumScaleFactor(0.65).multilineTextAlignment(.center)
                 .foregroundColor(glass ? .primary : paper ? Color(red:0.12,green:0.15,blue:0.15) : .white)
@@ -25,7 +60,9 @@ struct OverlayView:View {
                     .font(.system(size:compact ? 12 : max(13,model.fontSize*0.66))).lineLimit(1).minimumScaleFactor(0.8)
                     .foregroundColor(glass ? .secondary : paper ? .black.opacity(0.65) : .white.opacity(0.7))
             }
-        }.padding(.horizontal,26).frame(maxWidth:.infinity,maxHeight:.infinity)
+        }.animation(reduceMotion ? nil : .easeInOut(duration:0.24),value:model.mainText)
+            .animation(reduceMotion ? nil : .linear(duration:0.1),value:model.lyricProgress)
+            .padding(.horizontal,26).frame(maxWidth:.infinity,maxHeight:.infinity)
             .background((glass ? Color.clear : paper ? Color(red:0.98,green:0.97,blue:0.93) : model.theme=="pine" ? Color(red:0.05,green:0.15,blue:0.12) : ink).opacity(model.opacity))
             .clipShape(RoundedRectangle(cornerRadius:model.placement=="bottom" ? 0 : fused ? model.dockCornerRadius : 18,style:.continuous))
             .overlay(RoundedRectangle(cornerRadius:model.placement=="bottom" ? 0 : fused ? model.dockCornerRadius : 18).stroke(glass ? .clear : paper ? .black.opacity(0.09) : .white.opacity(0.12),lineWidth:1))
@@ -98,10 +135,13 @@ struct SettingsView:View {
                 }
                 VStack(spacing:6){
                     ProgressView(value:min(1,max(0,model.position/max(1,model.snapshot?.duration ?? 1)))).tint(mint)
+                        .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .linear(duration:0.1),value:model.position)
                     HStack{Text(clock(model.position));Spacer();Text(clock(model.snapshot?.duration ?? 0))}.font(.system(size:10,design:.monospaced)).foregroundColor(.white.opacity(0.6))
                 }
                 Divider().overlay(.white.opacity(0.1))
-                Text(model.mainText).font(.system(size:21,weight:.medium)).foregroundColor(mint).lineLimit(2).frame(maxWidth:.infinity,alignment:.center).padding(.top,2)
+                KaraokeText(text:model.primaryLyricText,progress:model.lyricProgress,color:.white.opacity(0.85),highlight:model.karaokeColor).font(.system(size:21,weight:.medium))
+                    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .linear(duration:0.1),value:model.lyricProgress)
+                    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration:0.24),value:model.mainText).lineLimit(2).frame(maxWidth:.infinity,alignment:.center).padding(.top,2)
                 Text(model.secondaryText).font(.system(size:12)).foregroundColor(.white.opacity(0.65)).lineLimit(2).frame(maxWidth:.infinity,alignment:.center)
             }.padding(23).background(ink).cornerRadius(16)
             HStack(alignment:.center){
@@ -179,7 +219,14 @@ struct SettingsView:View {
                 Toggle("暂停时隐藏",isOn:$model.hidePaused)
                 Toggle("鼠标靠近歌词条或 Dock 时让位",isOn:$model.hideNearDock).disabled(model.placement=="dock")
                 if model.placement=="dock"{Text("融合模式始终让位，方便访问 Dock 图标。").font(.system(size:10)).foregroundColor(.secondary)}
-                Toggle("显示下一句",isOn:$model.twoLines)
+                Toggle("显示第二行（翻译或下一句）",isOn:$model.twoLines)
+            }}
+            card{VStack(alignment:.leading,spacing:14){
+                Toggle("歌词流光效果",isOn:$model.karaokeEnabled)
+                ColorPicker("流光颜色",selection:$model.karaokeColor,supportsOpacity:false)
+                    .disabled(!model.karaokeEnabled)
+                    .modifier(SidebarFocusAppearance())
+                Text("仅为第一行大歌词染色，第二行保留原色。增强 LRC 跟随逐字时间，普通歌词按句时长估算。").font(.system(size:11)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
             }}
             card{VStack(alignment:.leading,spacing:12){
                 Label(model.dockStatus,systemImage:model.dockExact ? "checkmark.circle" : "rectangle.dashed").font(.system(size:12,weight:.medium))

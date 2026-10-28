@@ -33,6 +33,13 @@ final class AppModel:ObservableObject {
     @Published var hidePaused=true {didSet{defaults.set(hidePaused,forKey:"hidePaused")}}
     @Published var hideNearDock=true {didSet{defaults.set(hideNearDock,forKey:"hideNearDock")}}
     @Published var twoLines=true {didSet{defaults.set(twoLines,forKey:"twoLines")}}
+    @Published var karaokeEnabled=true {didSet{defaults.set(karaokeEnabled,forKey:"karaokeEnabled")}}
+    @Published var karaokeColor:Color = .teal {
+        didSet {
+            guard let color=NSColor(karaokeColor).usingColorSpace(.sRGB) else{return}
+            defaults.set([Double(color.redComponent),Double(color.greenComponent),Double(color.blueComponent)],forKey:"karaokeColor")
+        }
+    }
     @Published var fontSize:Double=22 {didSet{defaults.set(fontSize,forKey:"fontSize")}}
     @Published var opacity:Double=0.88 {didSet{defaults.set(opacity,forKey:"opacity")}}
     @Published var offset:Double=0 {didSet{defaults.set(offset,forKey:"offset")}}
@@ -67,8 +74,13 @@ final class AppModel:ObservableObject {
     init(monitor:PlaybackMonitoring=NowPlayingMonitor(),defaults:UserDefaults = .standard,session:URLSession?=nil,
          isPlayerRunning:@escaping(String)->Bool={ !NSRunningApplication.runningApplications(withBundleIdentifier:$0).isEmpty },refreshTimeout:TimeInterval=6){
         self.monitor=monitor;self.defaults=defaults;self.suppliedSession=session;self.isPlayerRunning=isPlayerRunning;self.refreshTimeout=refreshTimeout
-        defaults.register(defaults:["overlayVisible":true,"hidePaused":true,"hideNearDock":true,"twoLines":true,"fontSize":22.0,"opacity":0.88,"offset":0.0,"placement":"dock","theme":"glass","display":"main","online":false])
+        defaults.register(defaults:["karaokeEnabled":true,"overlayVisible":true,"hidePaused":true,"hideNearDock":true,"twoLines":true,"fontSize":22.0,"opacity":0.88,"offset":0.0,"placement":"dock","theme":"glass","display":"main","online":false])
         overlayVisible=defaults.bool(forKey:"overlayVisible");hidePaused=defaults.bool(forKey:"hidePaused");hideNearDock=defaults.bool(forKey:"hideNearDock");twoLines=defaults.bool(forKey:"twoLines")
+        karaokeEnabled=defaults.bool(forKey:"karaokeEnabled")
+        if let components=defaults.array(forKey:"karaokeColor") as? [Double],components.count==3,
+           components.allSatisfy({$0.isFinite && (0...1).contains($0)}) {
+            karaokeColor=Color(.sRGB,red:components[0],green:components[1],blue:components[2],opacity:1)
+        }
         fontSize=max(16,min(34,defaults.double(forKey:"fontSize")));opacity=max(0.45,min(1,defaults.double(forKey:"opacity")));offset=max(-5,min(5,defaults.double(forKey:"offset")))
         placement=defaults.string(forKey:"placement") ?? "dock";theme=defaults.string(forKey:"theme") ?? "glass";display=defaults.string(forKey:"display") ?? "main";online=defaults.bool(forKey:"online")
         roots=defaults.stringArray(forKey:"roots") ?? [];manual=defaults.dictionary(forKey:"manualFiles") as? [String:String] ?? [:]
@@ -210,6 +222,15 @@ final class AppModel:ObservableObject {
         onlineTask?.resume()
     }
     var currentIndex:Int? {document?.index(at:position+offset)}
+    var lyricProgress:Double? {
+        guard karaokeEnabled, previewUntil <= Date(), let doc=document, let index=currentIndex,
+              !doc.lines[index].text.isEmpty else { return nil }
+        var line=doc.lines[index]
+        line.text=line.text.components(separatedBy:"\n").first ?? line.text
+        line.words=line.words.filter{$0.offset<=line.text.count}
+        let end=line.end ?? (index+1 < doc.lines.count ? doc.lines[index+1].time : snapshot?.duration ?? line.time)
+        return line.progress(at:position+offset,until:end)
+    }
     var mainText:String {
         if previewUntil>Date(){return "让每一句，留在眼前。"}
         guard let doc=document else{return snapshot?.title ?? "岸词"}
@@ -219,9 +240,14 @@ final class AppModel:ObservableObject {
         }
         return doc.plain.components(separatedBy:.newlines).first(where:{!$0.trimmingCharacters(in:.whitespaces).isEmpty}) ?? "暂无歌词"
     }
+    var primaryLyricText:String {mainText.components(separatedBy:"\n").first ?? mainText}
     var secondaryText:String {
         if previewUntil>Date(){return "岸词 SHORE LYRICS · 底部歌词预览"}
         if let doc=document,doc.timed {
+            if let index=currentIndex {
+                let translation=doc.lines[index].text.components(separatedBy:"\n").dropFirst().joined(separator:" · ")
+                if !translation.isEmpty{return translation}
+            }
             let next=(currentIndex ?? -1)+1
             return next<doc.lines.count ? doc.lines[next].text : ""
         }
