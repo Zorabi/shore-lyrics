@@ -36,6 +36,7 @@ final class AppModel:ObservableObject {
     @Published var hideNearDock=true {didSet{defaults.set(hideNearDock,forKey:"hideNearDock")}}
     @Published var twoLines=true {didSet{defaults.set(twoLines,forKey:"twoLines")}}
     @Published var karaokeEnabled=true {didSet{defaults.set(karaokeEnabled,forKey:"karaokeEnabled")}}
+    @Published var karaokeSpeed:Double=1.38 {didSet{defaults.set(karaokeSpeed,forKey:"karaokeSpeed")}}
     @Published var karaokeColor:Color = .teal {
         didSet {
             guard let color=NSColor(karaokeColor).usingColorSpace(.sRGB) else{return}
@@ -85,9 +86,11 @@ final class AppModel:ObservableObject {
     init(monitor:PlaybackMonitoring=NowPlayingMonitor(),defaults:UserDefaults = .standard,session:URLSession?=nil,
          isPlayerRunning:@escaping(String)->Bool={ !NSRunningApplication.runningApplications(withBundleIdentifier:$0).isEmpty },refreshTimeout:TimeInterval=6,onlineTimeout:TimeInterval=15){
         self.monitor=monitor;self.defaults=defaults;self.suppliedSession=session;self.isPlayerRunning=isPlayerRunning;self.refreshTimeout=refreshTimeout;self.onlineTimeout=onlineTimeout
-        defaults.register(defaults:["karaokeEnabled":true,"overlayVisible":true,"hidePaused":true,"hideNearDock":true,"twoLines":true,"fontSize":22.0,"opacity":0.88,"offset":0.0,"placement":"dock","theme":"glass","display":"main","online":false])
+        defaults.register(defaults:["karaokeSpeed":1.38,"karaokeEnabled":true,"overlayVisible":true,"hidePaused":true,"hideNearDock":true,"twoLines":true,"fontSize":22.0,"opacity":0.88,"offset":0.0,"placement":"dock","theme":"glass","display":"main","online":false])
         overlayVisible=defaults.bool(forKey:"overlayVisible");hidePaused=defaults.bool(forKey:"hidePaused");hideNearDock=defaults.bool(forKey:"hideNearDock");twoLines=defaults.bool(forKey:"twoLines")
         karaokeEnabled=defaults.bool(forKey:"karaokeEnabled")
+        let savedSpeed=defaults.double(forKey:"karaokeSpeed")
+        karaokeSpeed=savedSpeed.isFinite ? max(0.5,min(2,savedSpeed)) : 1.38
         if let components=defaults.array(forKey:"karaokeColor") as? [Double],components.count==3,
            components.allSatisfy({$0.isFinite && (0...1).contains($0)}) {
             karaokeColor=Color(.sRGB,red:components[0],green:components[1],blue:components[2],opacity:1)
@@ -270,7 +273,7 @@ final class AppModel:ObservableObject {
         line.text=line.text.components(separatedBy:"\n").first ?? line.text
         line.words=line.words.filter{$0.offset<=line.text.count}
         let end=line.end ?? (index+1 < doc.lines.count ? doc.lines[index+1].time : snapshot?.duration ?? line.time)
-        return line.progress(at:playbackPosition+offset,until:end)
+        return line.progress(at:playbackPosition+offset,until:end,estimatedSpeed:karaokeSpeed)
     }
     var mainText:String {
         if previewUntil>Date(){return "让每一句，留在眼前。"}

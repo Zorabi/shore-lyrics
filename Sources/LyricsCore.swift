@@ -13,11 +13,16 @@ struct LyricLine: Codable, Equatable {
     var text: String
     var end: Double? = nil
     var words: [LyricWord] = []
-    func progress(at seconds: Double, until endTime: Double) -> Double {
+    func progress(at seconds: Double, until endTime: Double, estimatedSpeed:Double=1) -> Double {
         guard seconds.isFinite, endTime > time, !text.isEmpty else { return 0 }
         if seconds < time { return 0 }
         if seconds >= endTime { return 1 }
-        guard !words.isEmpty else { return min(1,max(0,(seconds-time)/(endTime-time))) }
+        guard !words.isEmpty else {
+            // Plain LRC has no word timing: finish the estimated sweep slightly early.
+            // Explicit subtitle intervals keep their original pace.
+            let speed=end == nil && estimatedSpeed.isFinite ? max(0.5,min(2,estimatedSpeed)) : 1.0
+            return min(1,max(0,(seconds-time)/(endTime-time)*speed))
+        }
         let count = Double(text.count)
         guard let index = words.lastIndex(where: { $0.time <= seconds }) else { return 0 }
         let word = words[index]

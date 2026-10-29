@@ -57,18 +57,25 @@ private final class MockLyricsHTTP:URLProtocol {
             check(model.primaryLyricText=="原文" && model.secondaryText=="翻译","bilingual lyrics keep translation on uncolored secondary row")
             check(model.lyricProgress != nil,"karaoke enabled by default")
             let identity=model.lyricTransitionID
-            check(abs((model.lyricProgress(at:2.5) ?? 0)-0.75)<0.001,"display frame projects progress without changing model position")
+            check(abs((model.lyricProgress(at:2.5) ?? 0)-1.0)<0.001,"display frame projects progress without changing model position")
             check(model.position==2,"display frame never advances paused playback state")
+            for time in [1.0,1.5,2.0,2.5,2.99] {
+                check(abs((model.lyricProgress(at:time) ?? -1)-min(1,(time-1)/2*1.38))<0.001,"plain lyric display uses faster estimation without changing playback time")
+            }
             model.position=1.25
-            check(abs((model.lyricProgress ?? 0)-0.125)<0.001,"backward seek aligns immediately without interpolation")
+            check(abs((model.lyricProgress ?? 0)-0.1725)<0.001,"backward seek aligns immediately without interpolation")
             model.position=3.1
             check(model.lyricTransitionID != identity,"line identity follows timestamps for transitions")
 
+            model.karaokeSpeed=1
+            check(abs((model.lyricProgress(at:2) ?? 0)-0.5)<0.001,"speed setting updates ordinary LRC immediately")
+            model.karaokeSpeed=1.6
             model.karaokeEnabled=false
             check(model.lyricProgress==nil && !prefs.bool(forKey:"karaokeEnabled"),"karaoke toggle disables highlight and persists")
             model.karaokeColor = .red
             let restored=AppModel(monitor:FakeMonitor(),defaults:prefs,session:session())
             defer{restored.stop()}
+            check(restored.karaokeSpeed==1.6,"custom sweep speed persists across model initialization")
             check(!restored.karaokeEnabled && (prefs.array(forKey:"karaokeColor") as? [Double])?.first==1,"custom highlight color persists")
         }
         // Online priority overrides embedded lyrics, with local fallback and cache isolation.
