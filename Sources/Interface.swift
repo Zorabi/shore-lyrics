@@ -65,7 +65,7 @@ struct SettingsView:View {
                         .frame(maxWidth:.infinity,alignment:.leading)
                         .help("当前歌词来源："+(model.document?.source ?? "暂无歌词"))
                         .accessibilityLabel("当前歌词来源："+(model.document?.source ?? "暂无歌词"))
-                    Text("0.2.6 · © 2026 dongx").font(.system(size:10)).foregroundColor(.secondary)
+                    Text("\(Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "开发版") · © 2026 dongx").font(.system(size:10)).foregroundColor(.secondary)
                 }.padding(18)
             }.frame(width:178).background(Color(nsColor:.windowBackgroundColor))
             Divider()
