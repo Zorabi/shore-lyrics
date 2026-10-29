@@ -37,13 +37,14 @@ private struct SidebarFocusAppearance:ViewModifier {
     }
 }
 
-private enum Page:String,CaseIterable {
+enum Page:String,CaseIterable {
     case playing="正在播放",sources="歌词来源",appearance="显示与外观",privacy="隐私与诊断"
     var icon:String{switch self{case .playing:return "waveform";case .sources:return "folder";case .appearance:return "rectangle.bottomthird.inset.filled";case .privacy:return "checkmark.shield"}}
 }
 struct SettingsView:View {
     @ObservedObject var model:AppModel
-    @State private var page:Page = .playing
+    @State private var page:Page
+    init(model:AppModel,page:Page = .playing){self.model=model;self._page=State(initialValue:page)}
     var body:some View {
         HStack(spacing:0){
             VStack(alignment:.leading,spacing:28){
@@ -58,35 +59,43 @@ struct SettingsView:View {
                 Spacer()
                 VStack(alignment:.leading,spacing:7){
                     Label(model.online ? "在线匹配已开启" : "本地优先 · 在线关闭",systemImage:model.online ? "network" : "lock.shield").font(.system(size:11,weight:.medium))
+                    Label(model.document?.source ?? "暂无歌词来源",systemImage:"text.alignleft")
+                        .font(.system(size:11,weight:.medium))
+                        .lineLimit(1).truncationMode(.middle)
+                        .frame(maxWidth:.infinity,alignment:.leading)
+                        .help("当前歌词来源："+(model.document?.source ?? "暂无歌词"))
+                        .accessibilityLabel("当前歌词来源："+(model.document?.source ?? "暂无歌词"))
                     Text("0.2.6 · © 2026 dongx").font(.system(size:10)).foregroundColor(.secondary)
                 }.padding(18)
             }.frame(width:178).background(Color(nsColor:.windowBackgroundColor))
             Divider()
-            ScrollView{
-                VStack(alignment:.leading,spacing:22){
-                    switch page{
-                    case .playing:playingPage
-                    case .sources:sourcesPage
-                    case .appearance:appearancePage
-                    case .privacy:privacyPage
-                    }
-                }.padding(28).frame(maxWidth:.infinity,alignment:.leading)
-            }.background(Color(nsColor:.controlBackgroundColor))
+            GeometryReader{geometry in
+                ScrollView{
+                    VStack(alignment:.leading,spacing:22){
+                        switch page{
+                        case .playing:playingPage
+                        case .sources:sourcesPage
+                        case .appearance:appearancePage
+                        case .privacy:privacyPage
+                        }
+                    }.frame(width:max(0,geometry.size.width-56),alignment:.leading).padding(28)
+                }.background(Color(nsColor:.controlBackgroundColor))
+            }
         }.frame(minWidth:820,minHeight:640).tint(.teal)
     }
     private func heading(_ title:String,_ subtitle:String)->some View {
         VStack(alignment:.leading,spacing:7){Text(title).font(.system(size:24,weight:.semibold));Text(subtitle).font(.system(size:12)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)}
     }
     private func pill(_ text:String,icon:String)->some View {
-        Label(text,systemImage:icon).font(.system(size:10,weight:.medium)).padding(.horizontal,9).padding(.vertical,5).background(Color.teal.opacity(0.09)).cornerRadius(6)
+        Label(text,systemImage:icon).font(.system(size:10,weight:.medium)).lineLimit(1).truncationMode(.middle).padding(.horizontal,9).padding(.vertical,5).background(Color.teal.opacity(0.09)).cornerRadius(6)
     }
     private var playingPage:some View {
-        VStack(alignment:.leading,spacing:20){
-            HStack(alignment:.top){heading("随系统，随音乐。","跟随 macOS 正在播放的应用，不限定播放器或音乐目录。");Spacer();Button("预览歌词条"){model.preview()}.controlSize(.large)}
+        VStack(alignment:.leading,spacing:12){
+            HStack(alignment:.top){heading("随系统，随音乐。","跟随 macOS 正在播放的应用，不限定播放器或音乐目录。");Spacer();Button("预览歌词条"){model.preview()}}
             VStack(alignment:.leading,spacing:16){
                 HStack{
                     Circle().fill(model.snapshot?.playing==true ? mint : Color.white.opacity(0.35)).frame(width:7,height:7)
-                    Text(model.playerName).font(.system(size:12,weight:.medium)).foregroundColor(.white.opacity(0.8))
+                    Text(model.playerName).font(.system(size:12,weight:.medium)).foregroundColor(.white)
                     Spacer();Text(model.snapshot == nil ? "等待播放" : model.snapshot?.playing==true ? "正在播放" : "已暂停").font(.system(size:11)).foregroundColor(.white.opacity(0.65))
                 }
                 VStack(alignment:.leading,spacing:7){
@@ -96,32 +105,50 @@ struct SettingsView:View {
                 VStack(spacing:6){
                     ProgressView(value:min(1,max(0,model.position/max(1,model.snapshot?.duration ?? 1)))).tint(mint)
                         .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || model.lyricJumped || model.snapshot?.playing != true ? nil : .linear(duration:0.1),value:model.position)
-                    HStack{Text(clock(model.position));Spacer();Text(clock(model.snapshot?.duration ?? 0))}.font(.system(size:10,design:.monospaced)).foregroundColor(.white.opacity(0.6))
+                    HStack{Text(clock(model.position));Spacer();Text(clock(model.snapshot?.duration ?? 0))}.font(.system(size:10,design:.monospaced)).foregroundColor(.white.opacity(0.65))
                 }
                 Divider().overlay(.white.opacity(0.1))
                 KaraokeText(model:model,color:.white.opacity(0.85),fontSize:21)
                     .frame(maxWidth:.infinity,alignment:.center).padding(.top,2)
                 Text(model.secondaryText).font(.system(size:12)).foregroundColor(.white.opacity(0.65)).lineLimit(2).frame(maxWidth:.infinity,alignment:.center)
-            }.padding(23).background(ink).cornerRadius(16)
-            HStack(alignment:.center){
-                pill(model.document?.source ?? "等待歌词来源",icon:model.document == nil ? "text.magnifyingglass" : "text.alignleft")
-                if let doc=model.document{pill(doc.timed ? "有时间轴" : "无时间轴",icon:doc.timed ? "clock" : "text.justify")}
-                Spacer()
-                Button{model.chooseFile()} label: {Label("选择歌词 / 音频",systemImage:"doc.badge.plus")}.disabled(model.snapshot == nil)
-                if model.isLoadingLyrics{ProgressView().controlSize(.small).frame(width:14).accessibilityLabel("正在匹配歌词")}
-                Button{model.forceReload()} label: {Label("刷新歌词",systemImage:"arrow.clockwise")}.disabled(model.isLoadingLyrics).help("重新读取当前歌曲并重试匹配，暂停时也可使用（⌘R）")
-            }
-            Text(model.state).font(.system(size:12)).foregroundColor(.secondary).textSelection(.enabled).fixedSize(horizontal:false,vertical:true)
+            }.frame(maxWidth:.infinity,alignment:.leading).padding(18).background(ink).cornerRadius(12)
+            card{VStack(alignment:.leading,spacing:10){
+                ViewThatFits(in:.horizontal){
+                    HStack(spacing:16){
+                        lyricsSourceBadges
+                        Spacer(minLength:0)
+                        lyricsActions.fixedSize()
+                    }
+                    VStack(alignment:.leading,spacing:10){
+                        lyricsSourceBadges
+                        HStack{Spacer(minLength:0);lyricsActions.fixedSize()}
+                    }
+                }
+                Text(model.state).font(.system(size:12)).foregroundColor(.secondary).textSelection(.enabled).fixedSize(horizontal:false,vertical:true)
+            }}
             if let doc=model.document{
-                lyricsList(doc)
+                card(verticalPadding:10){lyricsList(doc)}
             }else{
-                VStack(alignment:.leading,spacing:9){
+                card{VStack(alignment:.leading,spacing:9){
                     Label("还没有找到歌词",systemImage:"text.bubble").font(.system(size:14,weight:.medium))
                     Text("音频内嵌歌词、同名 LRC / SRT，或可选的在线匹配。歌曲信息读取始终跟随系统。").font(.system(size:12)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
                     Button("管理歌词来源"){page = .sources}.padding(.top,4)
-                }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(Color(nsColor:.windowBackgroundColor)).cornerRadius(12)
+                }}
             }
-            Text("播放、暂停和跳转请在播放器中操作。岸词只读取信息。").font(.system(size:10)).foregroundColor(.secondary)
+            footer(verticalPadding:4){Text("播放、暂停和跳转请在播放器中操作。岸词只读取信息。").font(.system(size:10)).foregroundColor(.secondary)}
+        }
+    }
+    private var lyricsSourceBadges:some View {
+        HStack(spacing:8){
+            pill(model.document?.source ?? "等待歌词来源",icon:model.document == nil ? "text.magnifyingglass" : "text.alignleft")
+            if let doc=model.document{pill(doc.timed ? "有时间轴" : "无时间轴",icon:doc.timed ? "clock" : "text.justify").fixedSize()}
+        }
+    }
+    private var lyricsActions:some View {
+        HStack{
+            Button{model.chooseFile()} label:{Label("选择歌词 / 音频",systemImage:"doc.badge.plus")}.disabled(model.snapshot == nil)
+            if model.isLoadingLyrics{ProgressView().controlSize(.small).frame(width:14).accessibilityLabel("正在匹配歌词")}
+            Button{model.forceReload()} label:{Label("刷新歌词",systemImage:"arrow.clockwise")}.disabled(model.isLoadingLyrics).help("重新读取当前歌曲并重试匹配，暂停时也可使用（⌘R）")
         }
     }
     @ViewBuilder private func lyricsList(_ doc:LyricsDocument)->some View {
@@ -152,14 +179,14 @@ struct SettingsView:View {
                     pill("自动读取 · 只读访问",icon:"checkmark.circle")
                 }
             }
-            VStack(alignment:.leading,spacing:12){
+            card{VStack(alignment:.leading,spacing:12){
                 HStack{Text("本地匹配目录").font(.system(size:15,weight:.semibold));Spacer();Button{model.chooseRoots()} label: {Label("添加目录",systemImage:"plus")}}
                 Text("播放器没有给出文件路径时，用歌名、歌手与专辑在这些目录中匹配。可添加多个目录；不会修改音频文件。").font(.system(size:12)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
                 ForEach(model.roots,id:\.self){path in
                     HStack(spacing:10){Image(systemName:"folder.fill").foregroundColor(.teal);VStack(alignment:.leading,spacing:4){Text(URL(fileURLWithPath:path).lastPathComponent).font(.system(size:13,weight:.medium));Text(path).font(.system(size:10)).foregroundColor(.secondary).textSelection(.enabled).lineLimit(2)};Spacer();Button{model.removeRoot(path)} label: {Image(systemName:"minus.circle")}.buttonStyle(.borderless).help("仅移除匹配目录，不删除文件").accessibilityLabel("移除目录 \(path)")}.padding(14).background(Color(nsColor:.windowBackgroundColor)).cornerRadius(10)
                 }
                 HStack{Text(model.libraryStatus).font(.system(size:11)).foregroundColor(.secondary);Spacer();Button("重新扫描"){model.rescan()}.font(.system(size:11))}
-            }
+            }}
             card{
                 VStack(alignment:.leading,spacing:12){
                     HStack{Toggle("在线补充歌词",isOn:$model.online).toggleStyle(.switch);Spacer();if model.isMatchingOnline{ProgressView().controlSize(.small).accessibilityLabel("正在匹配在线歌词")};Button(model.isMatchingOnline ? "重新在线匹配" : "刷新在线匹配"){model.refreshLyrics(preferOnline:true)}.disabled(!model.online).help("重新查询在线歌词；查询中点击可取消旧请求并重试")}
@@ -170,8 +197,10 @@ struct SettingsView:View {
                 }
             }
             card{OnlineSourcesView(model:model)}
+            footer{VStack(alignment:.leading,spacing:22){
             HStack{Button("为当前歌曲手动选择文件"){model.chooseFile()}.disabled(model.snapshot == nil);Button("恢复自动匹配"){model.clearManual()}.disabled(model.snapshot == nil)}
             Text("支持 MP3 USLT / SYLT、M4A 内嵌歌词、FLAC Vorbis 注释，以及 LRC、SRT、纯文本。没有时间戳的歌词按原文显示，不虚构同步进度。").font(.system(size:11)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
+            }}
         }
     }
     private var appearancePage:some View {
@@ -238,7 +267,7 @@ struct SettingsView:View {
                 Label("不修改音频、不注入播放器、不发送播放控制",systemImage:"music.note")
                 Label("无遥测、无自动更新服务",systemImage:"network.slash")
             }.font(.system(size:12))}
-            VStack(alignment:.leading,spacing:12){
+            card{VStack(alignment:.leading,spacing:12){
                 Text("当前诊断").font(.system(size:15,weight:.semibold))
                 diagnostic("播放器",model.playerName)
                 diagnostic("应用标识",model.snapshot?.bundle ?? "—")
@@ -248,7 +277,8 @@ struct SettingsView:View {
                 diagnostic("在线查询",model.online ? "已开启，按启用来源查询" : "关闭；应用不发起网络请求")
                 diagnostic("Dock 融合",model.dockStatus)
                 diagnostic("匹配目录",String(model.roots.count)+" 个 / "+String(model.fileCount)+" 个音频文件")
-            }
+            }}
+            footer{VStack(alignment:.leading,spacing:22){
             Text("兼容范围：能够向 macOS 发布“正在播放”信息的播放器与浏览器。系统不提供信息的应用需单独适配；部分网页只发布标题，没有准确进度。系统媒体读取依赖私有接口，未来 macOS 更新可能需要维护。").font(.system(size:12)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
             HStack {
                 Button("重新读取歌词"){model.forceReload()}
@@ -258,9 +288,11 @@ struct SettingsView:View {
                 }
             }
             Text("岸词 · Copyright © 2026 dongx · AGPL-3.0-only。自由软件，不提供任何担保。").font(.system(size:11)).foregroundColor(.secondary)
+            }}
         }
     }
-    private func card<Content:View>(@ViewBuilder content:()->Content)->some View{content().padding(18).frame(maxWidth:.infinity,alignment:.leading).background(Color(nsColor:.windowBackgroundColor)).cornerRadius(12)}
-    private func diagnostic(_ title:String,_ value:String)->some View{HStack(alignment:.top){Text(title).foregroundColor(.secondary).frame(width:84,alignment:.leading);Text(value).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}.font(.system(size:11))}
+    private func footer<Content:View>(verticalPadding:CGFloat = 18,@ViewBuilder content:()->Content)->some View{content().frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,18).padding(.vertical,verticalPadding)}
+    private func card<Content:View>(verticalPadding:CGFloat = 18,@ViewBuilder content:()->Content)->some View{content().frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,18).padding(.vertical,verticalPadding).background(Color(nsColor:.windowBackgroundColor)).cornerRadius(12)}
+    private func diagnostic(_ title:String,_ value:String)->some View{HStack(alignment:.top){Text(title).foregroundColor(.secondary).frame(width:84,alignment:.leading);Text(value).textSelection(.enabled).fixedSize(horizontal:false,vertical:true).frame(maxWidth:.infinity,alignment:.leading)}.font(.system(size:11))}
 }
 func clock(_ value:Double)->String{guard value.isFinite,value>=0 else{return "0:00"};let seconds=Int(value);return String(format:"%d:%02d",seconds/60,seconds%60)}
