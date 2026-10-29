@@ -74,8 +74,11 @@ private final class MockLyricsHTTP:URLProtocol {
             model.karaokeEnabled=false
             check(model.lyricProgress==nil && !prefs.bool(forKey:"karaokeEnabled"),"karaoke toggle disables highlight and persists")
             model.karaokeColor = .red
+            model.theme="custom";model.customLyricColor = .red;model.customSecondaryColor = .blue;model.customBackgroundColor = .black
             let restored=AppModel(monitor:FakeMonitor(),defaults:prefs,session:session())
             defer{restored.stop()}
+            check(restored.theme=="custom" && NSColor(restored.customLyricColor).usingColorSpace(.sRGB)?.redComponent==1,"custom primary lyric color persists")
+            check(NSColor(restored.customSecondaryColor).usingColorSpace(.sRGB)?.blueComponent==1 && NSColor(restored.customBackgroundColor).usingColorSpace(.sRGB)?.redComponent==0,"secondary and background colors persist separately")
             check(restored.karaokeSpeed==1.6,"custom sweep speed persists across model initialization")
             check(!restored.karaokeEnabled && (prefs.array(forKey:"karaokeColor") as? [Double])?.first==1,"custom highlight color persists")
         }
