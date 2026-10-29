@@ -166,9 +166,10 @@ struct SettingsView:View {
                     Toggle("优先使用在线歌词",isOn:$model.preferOnlineLyrics).disabled(!model.online)
                     Text("开启后，在线匹配成功时优先显示在线歌词；查询期间及匹配失败时使用本地歌词。关闭后仅在本地无歌词时自动查询。此选项只改变显示来源，不修改歌词或音频文件。")
                         .font(.system(size:12)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
-                    Text("点击“刷新在线匹配”会主动重新查询。只向 LRCLIB 发送歌名、歌手、专辑与时长，对方可见网络来源 IP。不会发送文件路径、音频内容或账号信息。").font(.system(size:12)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
+                    Text("点击“刷新在线匹配”会主动重新查询。按启用的来源和优先级发送歌名、歌手，以及匹配所需的专辑与时长，对方可见网络来源 IP。不会发送文件路径、音频内容或账号信息。").font(.system(size:12)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
                 }
             }
+            card{OnlineSourcesView(model:model)}
             HStack{Button("为当前歌曲手动选择文件"){model.chooseFile()}.disabled(model.snapshot == nil);Button("恢复自动匹配"){model.clearManual()}.disabled(model.snapshot == nil)}
             Text("支持 MP3 USLT / SYLT、M4A 内嵌歌词、FLAC Vorbis 注释，以及 LRC、SRT、纯文本。没有时间戳的歌词按原文显示，不虚构同步进度。").font(.system(size:11)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
         }
@@ -233,7 +234,7 @@ struct SettingsView:View {
                 diagnostic("状态",model.snapshot?.playing==true ? "正在播放" : model.snapshot == nil ? "无媒体信息" : "已暂停")
                 diagnostic("歌词来源",model.document?.source ?? "尚未匹配")
                 diagnostic("本地文件",model.matchedFile?.path ?? "未匹配本地文件")
-                diagnostic("在线查询",model.online ? "已开启，仅 LRCLIB" : "关闭；应用不发起网络请求")
+                diagnostic("在线查询",model.online ? "已开启，按启用来源查询" : "关闭；应用不发起网络请求")
                 diagnostic("Dock 融合",model.dockStatus)
                 diagnostic("匹配目录",String(model.roots.count)+" 个 / "+String(model.fileCount)+" 个音频文件")
             }
