@@ -15,15 +15,15 @@ struct OverlayView:View {
     var glass:Bool{model.theme=="glass"}
     var body:some View {
         VStack(spacing:compact ? 3 : 7){
-            KaraokeText(model:model,color:glass ? .primary : paper ? Color(red:0.12,green:0.15,blue:0.15) : .white,fontSize:compact ? min(24,model.fontSize) : model.fontSize,rounded:true)
+            KaraokeText(model:model,color:model.theme=="custom" ? model.customLyricColor : glass ? .primary : paper ? Color(red:0.12,green:0.15,blue:0.15) : .white,fontSize:compact ? min(24,model.fontSize) : model.fontSize,rounded:true)
             if model.twoLines && !model.secondaryText.isEmpty {
                 Text(model.secondaryText.replacingOccurrences(of:"\n",with:" · "))
                     .font(.system(size:compact ? 12 : max(13,model.fontSize*0.66))).lineLimit(1).minimumScaleFactor(0.8)
-                    .foregroundColor(glass ? .secondary : paper ? .black.opacity(0.65) : .white.opacity(0.7))
+                    .foregroundColor(model.theme=="custom" ? model.customSecondaryColor : glass ? .secondary : paper ? .black.opacity(0.65) : .white.opacity(0.7))
             }
         }
             .padding(.horizontal,26).frame(maxWidth:.infinity,maxHeight:.infinity)
-            .background((glass ? Color.clear : paper ? Color(red:0.98,green:0.97,blue:0.93) : model.theme=="pine" ? Color(red:0.05,green:0.15,blue:0.12) : ink).opacity(model.opacity))
+            .background((model.theme=="custom" ? model.customBackgroundColor : glass ? Color.clear : paper ? Color(red:0.98,green:0.97,blue:0.93) : model.theme=="pine" ? Color(red:0.05,green:0.15,blue:0.12) : ink).opacity(model.opacity))
             .clipShape(RoundedRectangle(cornerRadius:model.placement=="bottom" ? 0 : fused ? model.dockCornerRadius : 18,style:.continuous))
             .overlay(RoundedRectangle(cornerRadius:model.placement=="bottom" ? 0 : fused ? model.dockCornerRadius : 18).stroke(glass ? .clear : paper ? .black.opacity(0.09) : .white.opacity(0.12),lineWidth:1))
             .padding(compact ? 0 : 3)
@@ -206,7 +206,18 @@ struct SettingsView:View {
                 Picker("显示位置",selection:$model.placement){Text("Dock 上方").tag("above");Text("与 Dock 融合").tag("dock");Text("屏幕底边窄条").tag("bottom")}
                 Text(model.placement=="dock" ? "覆盖 Dock 图标区域，鼠标靠近即还原图标。" : model.placement=="bottom" ? "全宽窄条紧贴屏幕最底边，位于 Dock 之上。" : "独立浮窗位于 Dock 上沿之外，不覆盖 Dock。").font(.system(size:10)).foregroundColor(.secondary)
                 Picker("显示屏幕",selection:$model.display){Text("主屏幕").tag("main");Text("跟随鼠标所在屏幕").tag("mouse")}.disabled(model.placement=="dock")
-                Picker("歌词配色",selection:$model.theme){Text("系统毛玻璃").tag("glass");Text("墨色").tag("ink");Text("松绿").tag("pine");Text("暖纸").tag("paper")}.pickerStyle(.segmented)
+                Picker("歌词配色",selection:$model.theme){Text("系统毛玻璃").tag("glass");Text("墨色").tag("ink");Text("松绿").tag("pine");Text("暖纸").tag("paper");Text("自定义").tag("custom")}.pickerStyle(.segmented)
+                if model.theme=="custom" {
+                    ColorPicker("主歌词颜色",selection:$model.customLyricColor,supportsOpacity:false).modifier(SidebarFocusAppearance())
+                    ColorPicker("第二行文字颜色",selection:$model.customSecondaryColor,supportsOpacity:false).modifier(SidebarFocusAppearance())
+                    ColorPicker("歌词背景颜色",selection:$model.customBackgroundColor,supportsOpacity:false).modifier(SidebarFocusAppearance())
+                    Text("自定义颜色自动保存；切换预设不会清除自定义颜色。背景透明度由下方滑块控制，流光颜色在上方单独设置。").font(.system(size:11)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
+                    VStack(spacing:6){
+                        Text("让喜欢的歌，留在视线边缘").font(.system(size:18,weight:.medium)).foregroundColor(model.customLyricColor)
+                        if model.twoLines{Text("第二行歌词颜色预览").font(.system(size:12)).foregroundColor(model.customSecondaryColor)}
+                    }.frame(maxWidth:.infinity).padding(.vertical,18).background(model.customBackgroundColor.opacity(model.opacity)).cornerRadius(12)
+                        .accessibilityLabel("自定义歌词配色预览")
+                }
                 VStack(alignment:.leading){HStack{Text("字号");Spacer();Text("\(Int(model.fontSize)) pt").foregroundColor(.secondary)};Slider(value:$model.fontSize,in:16...34,step:1).accessibilityLabel("歌词字号")}
                 VStack(alignment:.leading){HStack{Text("背景不透明度");Spacer();Text("\(Int(model.opacity*100))%").foregroundColor(.secondary)};Slider(value:$model.opacity,in:0.45...1).accessibilityLabel("背景不透明度").disabled(model.placement=="dock" && model.theme=="glass")}
                 if model.placement=="dock" {

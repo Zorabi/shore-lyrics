@@ -43,6 +43,17 @@ final class AppModel:ObservableObject {
             defaults.set([Double(color.redComponent),Double(color.greenComponent),Double(color.blueComponent)],forKey:"karaokeColor")
         }
     }
+    @Published var customLyricColor:Color = .white {didSet{saveColor(customLyricColor,key:"customLyricColor")}}
+    @Published var customSecondaryColor:Color = Color(white:0.7) {didSet{saveColor(customSecondaryColor,key:"customSecondaryColor")}}
+    @Published var customBackgroundColor:Color = Color(red:0.07,green:0.10,blue:0.13) {didSet{saveColor(customBackgroundColor,key:"customBackgroundColor")}}
+    private func saveColor(_ value:Color,key:String){
+        guard let color=NSColor(value).usingColorSpace(.sRGB) else{return}
+        defaults.set([Double(color.redComponent),Double(color.greenComponent),Double(color.blueComponent)],forKey:key)
+    }
+    private static func savedColor(_ defaults:UserDefaults,key:String,fallback:Color)->Color {
+        guard let values=defaults.array(forKey:key) as? [Double],values.count==3,values.allSatisfy({$0.isFinite && (0...1).contains($0)}) else{return fallback}
+        return Color(.sRGB,red:values[0],green:values[1],blue:values[2],opacity:1)
+    }
     @Published var fontSize:Double=22 {didSet{defaults.set(fontSize,forKey:"fontSize")}}
     @Published var opacity:Double=0.88 {didSet{defaults.set(opacity,forKey:"opacity")}}
     @Published var offset:Double=0 {didSet{defaults.set(offset,forKey:"offset")}}
@@ -127,6 +138,9 @@ final class AppModel:ObservableObject {
            components.allSatisfy({$0.isFinite && (0...1).contains($0)}) {
             karaokeColor=Color(.sRGB,red:components[0],green:components[1],blue:components[2],opacity:1)
         }
+        customLyricColor=Self.savedColor(defaults,key:"customLyricColor",fallback:customLyricColor)
+        customSecondaryColor=Self.savedColor(defaults,key:"customSecondaryColor",fallback:customSecondaryColor)
+        customBackgroundColor=Self.savedColor(defaults,key:"customBackgroundColor",fallback:customBackgroundColor)
         fontSize=max(16,min(34,defaults.double(forKey:"fontSize")));opacity=max(0.45,min(1,defaults.double(forKey:"opacity")));offset=max(-5,min(5,defaults.double(forKey:"offset")))
         placement=defaults.string(forKey:"placement") ?? "dock";theme=defaults.string(forKey:"theme") ?? "glass";display=defaults.string(forKey:"display") ?? "main";online=defaults.bool(forKey:"online")
         preferOnlineLyrics=defaults.bool(forKey:"preferOnlineLyrics")
