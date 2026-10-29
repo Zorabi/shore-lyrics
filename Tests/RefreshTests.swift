@@ -56,14 +56,15 @@ private final class MockLyricsHTTP:URLProtocol {
             model.position=2
             check(model.primaryLyricText=="原文" && model.secondaryText=="翻译","bilingual lyrics keep translation on uncolored secondary row")
             check(model.lyricProgress != nil,"karaoke enabled by default")
+            check(model.karaokeSpeed==1.2,"default ordinary LRC sweep speed is 120 percent")
             let identity=model.lyricTransitionID
-            check(abs((model.lyricProgress(at:2.5) ?? 0)-1.0)<0.001,"display frame projects progress without changing model position")
+            check(abs((model.lyricProgress(at:2.5) ?? 0)-0.9)<0.001,"display frame projects progress without changing model position")
             check(model.position==2,"display frame never advances paused playback state")
             for time in [1.0,1.5,2.0,2.5,2.99] {
-                check(abs((model.lyricProgress(at:time) ?? -1)-min(1,(time-1)/2*1.38))<0.001,"plain lyric display uses faster estimation without changing playback time")
+                check(abs((model.lyricProgress(at:time) ?? -1)-min(1,(time-1)/2*1.2))<0.001,"plain lyric display uses faster estimation without changing playback time")
             }
             model.position=1.25
-            check(abs((model.lyricProgress ?? 0)-0.1725)<0.001,"backward seek aligns immediately without interpolation")
+            check(abs((model.lyricProgress ?? 0)-0.15)<0.001,"backward seek aligns immediately without interpolation")
             model.position=3.1
             check(model.lyricTransitionID != identity,"line identity follows timestamps for transitions")
 
