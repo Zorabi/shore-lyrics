@@ -188,6 +188,11 @@ struct SettingsView:View {
                 ColorPicker("流光颜色",selection:$model.karaokeColor,supportsOpacity:false)
                     .disabled(!model.karaokeEnabled)
                     .modifier(SidebarFocusAppearance())
+                VStack(alignment:.leading,spacing:6){
+                    HStack{Text("普通 LRC 扫光速度");Spacer();Text("\(Int((model.karaokeSpeed*100).rounded()))%").foregroundColor(.secondary)}
+                    Slider(value:$model.karaokeSpeed,in:0.5...2,step:0.01).accessibilityLabel("普通 LRC 扫光速度")
+                    Text("100% 按整句时长推进；数值越大，染色完成越早。不影响逐字时间戳、SRT 或换句时间。").font(.system(size:11)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
+                }.disabled(!model.karaokeEnabled)
                 Text("仅为第一行大歌词染色，第二行保留原色。增强 LRC 跟随逐字时间，普通歌词按句时长估算。").font(.system(size:11)).foregroundColor(.secondary).fixedSize(horizontal:false,vertical:true)
             }}
             card{VStack(alignment:.leading,spacing:12){
