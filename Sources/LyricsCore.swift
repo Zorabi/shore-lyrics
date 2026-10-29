@@ -67,7 +67,26 @@ enum LyricsParser {
         if let m = offsetRE.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)), let r = Range(m.range(at: 1), in: raw) { offset = (Double(raw[r]) ?? 0) / 1000 }
         let wordStamp = try! NSRegularExpression(pattern: #"<(\d{1,3}):(\d{1,2})(?:[\.:](\d{1,3}))?>"#)
         var result: [LyricLine] = []
-        for line in raw.components(separatedBy: "\n") {
+        for rawLine in raw.components(separatedBy: "\n") {
+            var line=rawLine
+            let initial=stamp.matches(in:line,range:NSRange(line.startIndex...,in:line))
+            // ESLRC places square timestamps between sung fragments. Preserve ordinary
+            // leading multi-timestamp LRC, but normalize interleaved stamps to word tags.
+            let interleaved=zip(initial,initial.dropFirst()).contains { left,right in
+                let start=left.range.location+left.range.length
+                let range=NSRange(location:start,length:right.range.location-start)
+                return Range(range,in:line).map{!line[$0].trimmingCharacters(in:.whitespaces).isEmpty} ?? false
+            }
+            if interleaved,let first=initial.first,let firstRange=Range(first.range,in:line) {
+                let prefix=String(line[firstRange])
+                for match in initial.reversed() {
+                    if let range=Range(match.range,in:line) {
+                        let token=String(line[range].dropFirst().dropLast())
+                        line.replaceSubrange(range,with:"<"+token+">")
+                    }
+                }
+                line=prefix+line
+            }
             let range = NSRange(line.startIndex..., in: line)
             let matches = stamp.matches(in: line, range: range)
             guard !matches.isEmpty else { continue }
@@ -99,7 +118,7 @@ enum LyricsParser {
         for line in result {
             if let last = merged.last, abs(last.time-line.time) < 0.001 {
                 if !line.text.isEmpty && !last.text.components(separatedBy: "\n").contains(line.text) {
-                    merged[merged.count-1].words = []
+                    merged[merged.count-1].words = last.text.isEmpty ? line.words : last.words
                     merged[merged.count-1].text += (last.text.isEmpty ? "" : "\n") + line.text
                 }
             } else { merged.append(line) }

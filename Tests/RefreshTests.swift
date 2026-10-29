@@ -45,7 +45,7 @@ private final class MockLyricsHTTP:URLProtocol {
         check(predicate(),description)
     }
     static func session()->URLSession{let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[MockLyricsHTTP.self];return URLSession(configuration:config)}
-    static func defaults()->(UserDefaults,String){let name="local.shorelyrics.tests."+UUID().uuidString;let value=UserDefaults(suiteName:name)!;value.set(true,forKey:"online");return(value,name)}
+    static func defaults()->(UserDefaults,String){let name="local.shorelyrics.tests."+UUID().uuidString;let value=UserDefaults(suiteName:name)!;value.set(true,forKey:"online");value.set(try! JSONEncoder().encode(OnlineLyricsSource.defaults.map{source in var item=source;item.enabled=item.id=="lrclib";return item}),forKey:"onlineSources");return(value,name)}
     static func paused()->PlaybackSnapshot{PlaybackSnapshot(capturedAt:Date().timeIntervalSince1970,playing:false,rate:0,bundle:"test.thirdparty.player",title:"Refresh Song",artist:"Refresh Artist",album:"Test Album",duration:300,position:42)}
     static func main()throws{
         do{
