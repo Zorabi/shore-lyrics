@@ -15,7 +15,7 @@ cp "$ROOT/NOTICE" "$APP/Contents/Resources/NOTICE"
 python3 - "$APP" <<'PY'
 import pathlib,plistlib,sys
 app=pathlib.Path(sys.argv[1])
-info={'CFBundleIdentifier':'dongx.shorelyrics','CFBundleName':'岸词','CFBundleDisplayName':'岸词','CFBundleExecutable':'ShoreLyrics','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.2.6','CFBundleVersion':'8','CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'13.0','LSUIElement':False,'NSHighResolutionCapable':True,'CFBundleDevelopmentRegion':'zh_CN','NSHumanReadableCopyright':'dongx · 岸词'}
+info={'CFBundleIdentifier':'dongx.shorelyrics','CFBundleName':'岸词','CFBundleDisplayName':'岸词','CFBundleExecutable':'ShoreLyrics','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.3.0','CFBundleVersion':'9','CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'13.0','LSUIElement':False,'NSHighResolutionCapable':True,'CFBundleDevelopmentRegion':'zh_CN','NSHumanReadableCopyright':'dongx · 岸词'}
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
 PY
 python3 "$ROOT/Tools/sign-local.py" "$APP"
