@@ -4,6 +4,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import QuartzCore
 
 private final class LyricsPanel:NSPanel {
     override var canBecomeKey:Bool{false}
@@ -15,13 +16,20 @@ final class OverlayController {
     private let surface=NSVisualEffectView()
     private let host:NSHostingView<OverlayView>
     private let dockReader=DockLayoutReader()
+    private let dockPreferences=UserDefaults(suiteName:"com.apple.dock")
     private var timer:Timer?
+    private var mouseMonitor:Any?
+    private var magnifiedDockZone:NSRect?
+    private var dockResumeTime:TimeInterval?
+    private var dockResumeFrame:NSRect?
+    private var fadeOutID:UUID?
     init(model:AppModel){
         self.model=model
         host=NSHostingView(rootView:OverlayView(model:model))
         panel=LyricsPanel(contentRect:NSRect(x:0,y:0,width:850,height:70),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
         panel.title="岸词 · Dock 歌词"
         panel.backgroundColor = .clear;panel.isOpaque=false;panel.hasShadow=false
+        panel.animationBehavior = .none
         panel.isFloatingPanel=true;panel.hidesOnDeactivate=false;panel.ignoresMouseEvents=true
         panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary,.stationary,.ignoresCycle]
         let container=NSView(frame:panel.contentView!.bounds)
@@ -30,11 +38,29 @@ final class OverlayController {
         surface.material = .popover;surface.blendingMode = .behindWindow;surface.state = .active
         host.frame=container.bounds;host.autoresizingMask=[.width,.height]
         container.addSubview(surface);container.addSubview(host);panel.contentView=container
+        mouseMonitor=NSEvent.addGlobalMonitorForEvents(matching:.mouseMoved){[weak self] _ in
+            guard let self,self.panel.isVisible,self.model.placement=="dock",
+                  self.model.previewUntil<Date(),
+                  self.magnifiedDockZone?.contains(NSEvent.mouseLocation)==true else{return}
+            self.deferDockResume(from:ProcessInfo.processInfo.systemUptime)
+            self.hidePanel()
+        }
         timer=Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){[weak self] _ in self?.update()}
     }
     private func update(){
         guard let primary=NSScreen.screens.first else{return}
-        let layout=dockReader.read()
+        let now=ProcessInfo.processInfo.systemUptime
+        let previewing=model.previewUntil>=Date()
+        let fused=model.placement=="dock"
+        if !fused || previewing{
+            dockResumeTime=nil
+            dockResumeFrame=nil
+        }
+        let resumeTime=dockResumeTime
+        let layout=dockReader.read(refresh:resumeTime.map{now >= $0} ?? false)
+        let dockZone=layout?.frame.insetBy(dx:-24,dy:-20)
+        let dockMagnifies=fused && layout?.orientation=="bottom" && dockPreferences?.bool(forKey:"magnification")==true
+        magnifiedDockZone=dockMagnifies ? dockZone : nil
         if let layout {
             let label=layout.exact ? "已精确跟随 Dock · \(layout.orientation=="bottom" ? "底部融合" : "侧边贴靠")" : "正在估算 Dock 布局 · 可授权精确跟随"
             if model.dockStatus != label{model.dockStatus=label}
@@ -42,9 +68,8 @@ final class OverlayController {
             if model.dockTrusted != layout.trusted{model.dockTrusted=layout.trusted}
             if model.dockCornerRadius != layout.cornerRadius{model.dockCornerRadius=layout.cornerRadius}
         }
-        guard model.shouldShow else{panel.orderOut(nil);return}
+        guard model.shouldShow else{hidePanel();return}
         let mouse=NSEvent.mouseLocation
-        let fused=model.placement=="dock"
         var screen=model.display=="mouse" ? NSScreen.screens.first(where:{$0.frame.contains(mouse)}) ?? primary : primary
         if fused,let layout{screen=layout.screen}
         let frame=screen.frame,visible=screen.visibleFrame
@@ -52,7 +77,7 @@ final class OverlayController {
         let width=min(900,max(320,frame.width-100))
         var rect=NSRect(x:frame.midX-width/2,y:visible.minY+12,width:width,height:height)
         if fused,let layout{
-            if !layout.visible && model.previewUntil<Date(){panel.orderOut(nil);return}
+            if !layout.visible && !previewing{hidePanel();return}
             if layout.orientation=="bottom" {
                 rect=layout.frame.insetBy(dx:-CGFloat(model.dockPadding),dy:0)
                 rect.origin.y+=CGFloat(model.dockOffset)
@@ -64,9 +89,32 @@ final class OverlayController {
             }
         }else if model.placement=="bottom"{rect=DockGeometry.bottomStrip(screen:frame,twoLines:model.twoLines)}
         rect.size.width=max(160,rect.width);rect.size.height=max(38,rect.height)
+        let pointerNearDock=dockZone?.contains(mouse) ?? false
+        let pointerNearLyrics=rect.insetBy(dx:-16,dy:-10).contains(mouse)
+        // Hide before resizing, and let the native Dock finish shrinking before showing again.
+        if (fused || model.hideNearDock) && !previewing && (pointerNearLyrics || pointerNearDock){
+            if fused,layout?.orientation=="bottom",layout?.exact==true{
+                deferDockResume(from:now)
+            }
+            let dockInteractionFrame=layout?.interactionFrame ?? layout?.frame
+            let pointerOverDock=dockInteractionFrame?.contains(mouse) ?? false
+            let dockResized=fused && layout?.orientation=="bottom" && panel.frame != rect
+            hidePanel(animated:fused && !dockMagnifies && !pointerOverDock && !dockResized)
+            return
+        }
+        if let resumeTime{
+            guard now>=resumeTime else{return}
+            // Compare fresh measurements on successive ticks before exposing the panel.
+            guard dockResumeFrame==rect else{
+                dockResumeFrame=rect
+                return
+            }
+            dockResumeTime=nil
+            dockResumeFrame=nil
+        }
         panel.level=model.placement=="above" ? .floating : .statusBar
         panel.hasShadow = model.placement=="above"
-        if panel.frame != rect{panel.setFrame(rect,display:true)}
+        if panel.frame != rect{panel.setFrame(rect,display:true,animate:false)}
         panel.contentView?.layer?.cornerRadius=model.placement=="bottom" ? 0 : fused && layout?.orientation=="bottom" ? min(layout?.cornerRadius ?? 18,min(rect.width,rect.height)/2) : 18
         if let layout {
             let detail="Dock \(NSStringFromRect(layout.frame)) · 面板 \(NSStringFromRect(rect)) · R \(String(format:"%.1f",layout.cornerRadius))"
@@ -74,14 +122,61 @@ final class OverlayController {
         }
         surface.isHidden=model.theme != "glass"
         surface.alphaValue=fused ? 1 : model.opacity
-        let dockZone=layout?.frame.insetBy(dx:-24,dy:-20)
-        let pointerNearDock=dockZone?.contains(mouse) ?? false
-        let pointerNearLyrics=rect.insetBy(dx:-16,dy:-10).contains(mouse)
-        // Fusion always yields to the pointer so icons stay visible when used.
-        if (fused || model.hideNearDock) && model.previewUntil<Date() && (pointerNearLyrics || pointerNearDock){panel.orderOut(nil);return}
-        if !panel.isVisible{panel.orderFrontRegardless()}
+        showPanel(animated:fused)
     }
-    func stop(){timer?.invalidate();panel.orderOut(nil)}
+    private func showPanel(animated:Bool){
+        guard !panel.isVisible || fadeOutID != nil else{return}
+        fadeOutID=nil
+        let fade=animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if !panel.isVisible{
+            panel.alphaValue=fade ? 0 : 1
+            if fade{
+                let lift=CABasicAnimation(keyPath:"transform.translation.y")
+                lift.fromValue = -3
+                lift.toValue = 0
+                lift.isAdditive=true
+                lift.duration=0.24
+                lift.timingFunction=CAMediaTimingFunction(name:.easeOut)
+                panel.contentView?.layer?.add(lift,forKey:"dockReveal")
+            }
+            panel.orderFrontRegardless()
+        }
+        NSAnimationContext.runAnimationGroup{context in
+            context.duration=fade ? 0.24 : 0
+            context.timingFunction=CAMediaTimingFunction(name:.easeOut)
+            panel.animator().alphaValue=1
+        }
+    }
+    private func hidePanel(animated:Bool=false){
+        guard panel.isVisible else{return}
+        guard animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else{
+            fadeOutID=nil
+            panel.orderOut(nil)
+            return
+        }
+        guard fadeOutID==nil else{return}
+        let id=UUID()
+        fadeOutID=id
+        NSAnimationContext.runAnimationGroup({context in
+            context.duration=0.15
+            context.timingFunction=CAMediaTimingFunction(name:.easeInEaseOut)
+            panel.animator().alphaValue=0
+        },completionHandler:{[weak self] in
+            guard let self,self.fadeOutID==id else{return}
+            self.fadeOutID=nil
+            self.panel.orderOut(nil)
+        })
+    }
+    private func deferDockResume(from now:TimeInterval){
+        dockResumeTime=now+0.25
+        dockResumeFrame=nil
+    }
+    func stop(){
+        timer?.invalidate()
+        if let mouseMonitor{NSEvent.removeMonitor(mouseMonitor)}
+        mouseMonitor=nil
+        hidePanel()
+    }
 }
 final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
     let model=AppModel()

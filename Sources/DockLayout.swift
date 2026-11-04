@@ -70,8 +70,8 @@ enum DockGeometry {
 final class DockLayoutReader {
     private var cached:DockLayout?
     private var lastRead=Date.distantPast
-    func read()->DockLayout? {
-        if Date().timeIntervalSince(lastRead)<0.35{return cached}
+    func read(refresh:Bool=false)->DockLayout? {
+        if !refresh,Date().timeIntervalSince(lastRead)<0.35{return cached}
         lastRead=Date()
         guard let primary=NSScreen.screens.first else{return nil}
         let defaults=UserDefaults(suiteName:"com.apple.dock")
