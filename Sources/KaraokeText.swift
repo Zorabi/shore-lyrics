@@ -4,6 +4,7 @@
 import SwiftUI
 import AppKit
 import CoreText
+import QuartzCore
 
 /// Core Text supplies both glyph positions and the text we draw, so masks stay aligned.
 struct KaraokeGlyphLayout {
@@ -44,14 +45,17 @@ struct KaraokeText: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0/60, paused: model.snapshot?.playing != true || !model.karaokeEnabled)) { context in
-            let projected = model.playbackPosition(at:context.date)
-            // The model owns line changes; never apply the next line's progress to outgoing text.
-            let position = model.document?.index(at:projected+model.offset) == model.currentIndex ? projected : model.position
-            GlyphText(text:model.primaryLyricText, progress:model.lyricProgress(at:position),
-                      color:NSColor(color), highlight:NSColor(model.karaokeColor),
-                      fontSize:fontSize, rounded:rounded, glow:!reduceMotion, dark:colorScheme == .dark, animateLineChange:!reduceMotion && !model.lyricJumped)
-        }
+        GlyphText(text:model.primaryLyricText, progress:model.lyricProgress,
+                  color:NSColor(color), highlight:NSColor(model.karaokeColor),
+                  fontSize:fontSize, rounded:rounded, glow:!reduceMotion, dark:colorScheme == .dark,
+                  animateLineChange:!reduceMotion && !model.lyricJumped,
+                  progressProvider:model.snapshot?.playing == true && model.karaokeEnabled ? { [weak model] in
+                      guard let model else{return nil}
+                      let projected=model.playbackPosition(at:Date())
+                      // Keep outgoing text on its own line until the model advances it.
+                      let position=model.document?.index(at:projected+model.offset) == model.currentIndex ? projected : model.position
+                      return model.lyricProgress(at:position)
+                  } : nil)
         .frame(height:ceil(fontSize*1.3))
         .accessibilityElement(children:.ignore)
         .accessibilityLabel("当前歌词：\(model.primaryLyricText)")
@@ -69,6 +73,7 @@ private struct GlyphText: NSViewRepresentable {
     var glow: Bool
     var dark: Bool
     var animateLineChange: Bool
+    var progressProvider:(()->Double?)?
 
     func makeNSView(context: Context) -> GlyphTextView {
         let view=GlyphTextView()
@@ -77,20 +82,27 @@ private struct GlyphText: NSViewRepresentable {
         return view
     }
     func updateNSView(_ view: GlyphTextView, context: Context) {
-        view.appearance = NSAppearance(named:dark ? .darkAqua : .aqua)
+        let appearanceName:NSAppearance.Name=dark ? .darkAqua : .aqua
+        let appearanceChanged=view.appearance?.name != appearanceName
+        if appearanceChanged{view.appearance=NSAppearance(named:appearanceName)}
+        if !animateLineChange{view.cancelLineTransition()}
+        view.progressProvider=progressProvider
+        let progress:Double?
+        if let progressProvider{progress=progressProvider()}else{progress=self.progress}
         let base=NSFont.systemFont(ofSize:fontSize,weight:rounded ? .semibold : .medium)
         let font=rounded ? NSFont(descriptor:base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor,size:fontSize) ?? base : base
+        let styleChanged=appearanceChanged || view.text != text || view.font != font || view.color != color || view.highlight != highlight || view.glow != glow
+        let changed=styleChanged || view.progress != progress
+        guard changed else{return}
         if view.text != text {
             view.prepareForLineChange(animated:animateLineChange)
-        } else if !animateLineChange {
-            view.cancelLineTransition()
         }
         if view.text != text || view.font != font {
             view.text=text; view.font=font
             view.layout=KaraokeGlyphLayout(text:text,font:font)
         }
         view.progress=progress; view.color=color; view.highlight=highlight; view.glow=glow
-        view.needsDisplay=true
+        view.refreshPresentation(rebuild:styleChanged)
     }
 }
 
@@ -112,6 +124,109 @@ final class GlyphTextView: NSView {
     var highlight=NSColor.systemTeal
     var glow=true
 
+    // Animation updates only this native view, without rebuilding the SwiftUI tree.
+    var progressProvider:(()->Double?)? {didSet{updateAnimationTimer()}}
+    private var animationTimer:Timer?
+    private var windowObservers:[NSObjectProtocol]=[]
+    var isAnimating:Bool {animationTimer != nil}
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        windowObservers.forEach{NotificationCenter.default.removeObserver($0)}
+        windowObservers=[]
+        if let window {
+            for name in [NSWindow.didChangeOcclusionStateNotification,NSWindow.didMiniaturizeNotification,NSWindow.didDeminiaturizeNotification] {
+                windowObservers.append(NotificationCenter.default.addObserver(forName:name,object:window,queue:.main){[weak self] _ in self?.updateAnimationTimer()})
+            }
+        }
+        updateAnimationTimer()
+    }
+    override func viewDidHide(){super.viewDidHide();updateAnimationTimer()}
+    override func viewDidUnhide(){super.viewDidUnhide();updateAnimationTimer()}
+
+    private func updateAnimationTimer() {
+        let visible=window?.occlusionState.contains(.visible)==true && !isHiddenOrHasHiddenAncestor
+        guard progressProvider != nil,visible else{
+            animationTimer?.invalidate();animationTimer=nil
+            return
+        }
+        guard animationTimer==nil else{return}
+        let timer=Timer(timeInterval:1.0/60,repeats:true){[weak self] _ in self?.advanceProgress()}
+        timer.tolerance=0.002
+        animationTimer=timer
+        RunLoop.main.add(timer,forMode:.common)
+    }
+    func advanceProgress() {
+        guard let progressProvider else{return}
+        let next=progressProvider()
+        guard next != progress else{return}
+        progress=next
+        refreshPresentation()
+    }
+
+    private let imageRoot=CALayer()
+    private let baseImage=CALayer()
+    private let sungClip=CALayer()
+    private let sungImage=CALayer()
+    private let glowImage=CALayer()
+    private let glowMask=CALayer()
+    private let leadingLight=CAGradientLayer()
+    private var cachedBounds=NSRect.zero
+    private var cachedScale:CGFloat=0
+
+    override func setFrameSize(_ size:NSSize){super.setFrameSize(size);refreshPresentation()}
+    override func viewDidChangeBackingProperties(){super.viewDidChangeBackingProperties();refreshPresentation(rebuild:true)}
+
+    // Rasterize each text/style once; normal animation changes only layer geometry.
+    func refreshPresentation(rebuild:Bool=false) {
+        if rebuild{cachedBounds = .zero}
+        guard window != nil,let layout,layout.width>0,let layer,bounds.width>0,bounds.height>0 else{
+            imageRoot.isHidden=true
+            needsDisplay=true
+            return
+        }
+        guard outgoingFrame==nil else{imageRoot.isHidden=true;needsDisplay=true;return}
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer{CATransaction.commit()}
+        if imageRoot.superlayer == nil {
+            layer.addSublayer(imageRoot)
+            imageRoot.addSublayer(baseImage);imageRoot.addSublayer(sungClip)
+            sungClip.masksToBounds=true;sungClip.addSublayer(sungImage)
+            imageRoot.addSublayer(glowImage);glowImage.mask=glowMask
+            glowImage.addSublayer(leadingLight)
+            leadingLight.startPoint=CGPoint(x:0,y:0.5);leadingLight.endPoint=CGPoint(x:1,y:0.5)
+        }
+        let scale=window?.backingScaleFactor ?? 2
+        if cachedBounds != bounds || cachedScale != scale {
+            cachedBounds=bounds;cachedScale=scale
+            imageRoot.frame=bounds
+            for image in [baseImage,sungImage,glowImage,glowMask]{image.frame=imageRoot.bounds;image.contentsScale=scale}
+            func bitmap(_ tint:NSColor)->CGImage? {
+                guard let context=CGContext(data:nil,width:Int(ceil(bounds.width*scale)),height:Int(ceil(bounds.height*scale)),bitsPerComponent:8,bytesPerRow:0,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue) else{return nil}
+                context.scaleBy(x:scale,y:scale)
+                effectiveAppearance.performAsCurrentDrawingAppearance {
+                    drawFrame(KaraokeFrame(layout:layout,font:font,progress:nil,color:tint,highlight:tint,glow:false),in:context,alpha:1,offset:0)
+                }
+                return context.makeImage()
+            }
+            baseImage.contents=bitmap(color)
+            let highlighted=bitmap(highlight)
+            sungImage.contents=highlighted;glowMask.contents=highlighted
+            let bright=highlight.blended(withFraction:0.38,of:.white) ?? highlight
+            leadingLight.colors=[bright.withAlphaComponent(0).cgColor,bright.cgColor]
+            needsDisplay=true
+        }
+        imageRoot.isHidden=false
+        let textScale=min(1,bounds.width/layout.width)
+        let origin=(bounds.width-layout.width*textScale)/2
+        let edge=origin+layout.frontier(progress:progress ?? 0).edge*textScale
+        sungClip.frame=CGRect(x:0,y:0,width:progress == nil ? 0 : edge,height:bounds.height)
+        let radius=max(3,font.pointSize*0.55)*textScale
+        glowImage.isHidden = !glow || progress == nil || progress!<=0 || progress!>=1
+        leadingLight.frame=CGRect(x:edge-radius,y:0,width:radius,height:bounds.height)
+    }
+
     private(set) var outgoingFrame:KaraokeFrame?
     private var transitionStart:TimeInterval=0
     private var transitionTimer:Timer?
@@ -128,21 +243,26 @@ final class GlyphTextView: NSView {
             if ProcessInfo.processInfo.systemUptime-self.transitionStart>=self.transitionDuration {
                 self.cancelLineTransition()
             }
-            self.needsDisplay=true
+            self.refreshPresentation()
         }
         transitionTimer=timer
         RunLoop.main.add(timer,forMode:.common)
     }
     func cancelLineTransition() {
+        guard transitionTimer != nil || outgoingFrame != nil else{return}
         transitionTimer?.invalidate();transitionTimer=nil;outgoingFrame=nil
-        needsDisplay=true
+        refreshPresentation()
     }
-    deinit {transitionTimer?.invalidate()}
+    deinit {
+        transitionTimer?.invalidate();animationTimer?.invalidate()
+        windowObservers.forEach{NotificationCenter.default.removeObserver($0)}
+    }
 
     override func hitTest(_ point:NSPoint)->NSView? { nil }
     override func draw(_ dirtyRect:NSRect) {
         guard let context=NSGraphicsContext.current?.cgContext else{return}
         context.clear(bounds)
+        if imageRoot.superlayer != nil && !imageRoot.isHidden{return}
         let elapsed=ProcessInfo.processInfo.systemUptime-transitionStart
         let fraction=min(1,max(0,elapsed/transitionDuration))
         let blend=fraction*fraction*(3-2*fraction)
@@ -157,7 +277,11 @@ final class GlyphTextView: NSView {
     private func drawFrame(_ frame:KaraokeFrame,in context:CGContext,alpha:Double,offset:CGFloat) {
         let layout=frame.layout,font=frame.font,progress=frame.progress
         let color=frame.color,highlight=frame.highlight,glow=frame.glow
-        guard layout.width>0,alpha>0 else{return}
+        guard layout.width>0,alpha>0,bounds.width>0 else{return}
+        // Core Text changes text state that saveGState/restoreGState do not restore.
+        // AppKit may reuse this context for other SwiftUI text in the same window.
+        let textMatrix=context.textMatrix,textPosition=context.textPosition
+        defer{context.textMatrix=textMatrix;context.textPosition=textPosition}
         // Composite each complete lyric once, including its base and highlight.
         context.saveGState()
         context.setAlpha(alpha)
@@ -165,7 +289,6 @@ final class GlyphTextView: NSView {
         context.beginTransparencyLayer(auxiliaryInfo:nil)
         // Scale the same glyph layout rather than separately measuring an overlay.
         let scale=min(1,bounds.width/layout.width)
-        guard scale>0 else{return}
         let x=(bounds.width-layout.width*scale)/2
         let baseline=(bounds.height-(font.ascender-font.descender)*scale)/2-font.descender*scale
         context.saveGState()

@@ -4,7 +4,7 @@
 import Foundation
 import AppKit
 
-struct PlaybackSnapshot: Codable {
+struct PlaybackSnapshot: Codable, Equatable {
     var capturedAt: Double
     var playing: Bool
     var rate: Double

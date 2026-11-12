@@ -56,6 +56,7 @@ final class OverlayController {
             dockResumeTime=nil
             dockResumeFrame=nil
         }
+        guard model.shouldShow else{hidePanel();return}
         let resumeTime=dockResumeTime
         let layout=dockReader.read(refresh:resumeTime.map{now >= $0} ?? false)
         let dockZone=layout?.frame.insetBy(dx:-24,dy:-20)
@@ -68,7 +69,6 @@ final class OverlayController {
             if model.dockTrusted != layout.trusted{model.dockTrusted=layout.trusted}
             if model.dockCornerRadius != layout.cornerRadius{model.dockCornerRadius=layout.cornerRadius}
         }
-        guard model.shouldShow else{hidePanel();return}
         let mouse=NSEvent.mouseLocation
         var screen=model.display=="mouse" ? NSScreen.screens.first(where:{$0.frame.contains(mouse)}) ?? primary : primary
         if fused,let layout{screen=layout.screen}
@@ -112,16 +112,21 @@ final class OverlayController {
             dockResumeTime=nil
             dockResumeFrame=nil
         }
-        panel.level=model.placement=="above" ? .floating : .statusBar
-        panel.hasShadow = model.placement=="above"
+        let level:NSWindow.Level=model.placement=="above" ? .floating : .statusBar
+        if panel.level != level{panel.level=level}
+        let shadow=model.placement=="above"
+        if panel.hasShadow != shadow{panel.hasShadow=shadow}
         if panel.frame != rect{panel.setFrame(rect,display:true,animate:false)}
-        panel.contentView?.layer?.cornerRadius=model.placement=="bottom" ? 0 : fused && layout?.orientation=="bottom" ? min(layout?.cornerRadius ?? 18,min(rect.width,rect.height)/2) : 18
+        let radius:CGFloat=model.placement=="bottom" ? 0 : fused && layout?.orientation=="bottom" ? min(layout?.cornerRadius ?? 18,min(rect.width,rect.height)/2) : 18
+        if panel.contentView?.layer?.cornerRadius != radius{panel.contentView?.layer?.cornerRadius=radius}
         if let layout {
             let detail="Dock \(NSStringFromRect(layout.frame)) · 面板 \(NSStringFromRect(rect)) · R \(String(format:"%.1f",layout.cornerRadius))"
             if model.dockGeometryDetails != detail{model.dockGeometryDetails=detail}
         }
-        surface.isHidden=model.theme != "glass"
-        surface.alphaValue=fused ? 1 : model.opacity
+        let hidden=model.theme != "glass"
+        if surface.isHidden != hidden{surface.isHidden=hidden}
+        let opacity=fused ? 1 : model.opacity
+        if surface.alphaValue != opacity{surface.alphaValue=opacity}
         showPanel(animated:fused)
     }
     private func showPanel(animated:Bool){
@@ -280,6 +285,10 @@ final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool {
         showSettings()
         return true
+    }
+    func windowDidChangeOcclusionState(_ notification:Notification){
+        guard let window=notification.object as? NSWindow,window === settings else{return}
+        model.playbackProgress.updatesEnabled=window.occlusionState.contains(.visible)
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool{false}
     func applicationWillTerminate(_ notification:Notification){model.stop();overlay?.stop();menuTimer?.invalidate()}

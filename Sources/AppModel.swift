@@ -11,6 +11,16 @@ private final class LyricsSessionGuard:NSObject,URLSessionTaskDelegate {
         completionHandler(OnlineLyricsSource.allowsRedirect(from:task.originalRequest?.url,to:request.url) ? request : nil)
     }
 }
+final class PlaybackProgress:ObservableObject {
+    @Published private(set) var displayedPosition:Double=0
+    var position:Double=0 {
+        didSet{if updatesEnabled,displayedPosition != position{displayedPosition=position}}
+    }
+    var updatesEnabled=true {
+        didSet{if updatesEnabled,displayedPosition != position{displayedPosition=position}}
+    }
+}
+
 final class AppModel:ObservableObject {
     @Published var dockPadding:Double=0 {didSet{defaults.set(dockPadding,forKey:"dockPadding")}}
     @Published var dockOffset:Double=0 {didSet{defaults.set(dockOffset,forKey:"dockOffset")}}
@@ -24,7 +34,16 @@ final class AppModel:ObservableObject {
     @Published var snapshot:PlaybackSnapshot?
     @Published var document:LyricsDocument?
     @Published var lyricJumped=false
-    @Published var position:Double=0
+    let playbackProgress=PlaybackProgress()
+    var position:Double {
+        get{playbackProgress.position}
+        set{
+            guard playbackProgress.position != newValue else{return}
+            let nextIndex=document?.index(at:newValue+offset)
+            if nextIndex != currentIndex || snapshot?.playing != true{objectWillChange.send()}
+            playbackProgress.position=newValue
+        }
+    }
     @Published var playerName="等待播放器"
     @Published var state="打开任意向 macOS 发布播放信息的播放器"
     @Published var libraryStatus="尚未添加本地歌词来源"
@@ -173,7 +192,8 @@ final class AppModel:ObservableObject {
             generation+=1;cancelOnlineLookup();snapshot=nil;document=nil;matchedFile=nil;playerName="系统连接中断"
             if pendingRefresh==nil{isLoadingLyrics=false;state="正在重新读取播放信息…"}
         }
-        position=snapshot == nil ? 0 : playbackClock.elapsed()
+        let nextPosition=snapshot == nil ? 0 : playbackClock.elapsed()
+        if position != nextPosition{position=nextPosition}
     }
     private func accept(_ new:PlaybackSnapshot){
         lastReceived=Date()
@@ -187,9 +207,18 @@ final class AppModel:ObservableObject {
         }
         let changed=snapshot?.key != new.key
         let now=Date().timeIntervalSince1970
-        lyricJumped=playbackClock.update(new,now:now)
-        snapshot=new;position=playbackClock.elapsed(now:now)
-        playerName=NSRunningApplication.runningApplications(withBundleIdentifier:bundle).first?.localizedName ?? bundle
+        let jumped=playbackClock.update(new,now:now)
+        if lyricJumped != jumped{lyricJumped=jumped}
+        // Capture timestamps keep the clock alive but do not change paused UI state.
+        var comparable=new
+        comparable.capturedAt=snapshot?.capturedAt ?? new.capturedAt
+        // The dedicated clock owns position updates; metadata observers need no clock ticks.
+        comparable.position=snapshot?.position ?? new.position
+        if snapshot != comparable{snapshot=new}
+        let nextPosition=playbackClock.elapsed(now:now)
+        if position != nextPosition{position=nextPosition}
+        let name=NSRunningApplication.runningApplications(withBundleIdentifier:bundle).first?.localizedName ?? bundle
+        if playerName != name{playerName=name}
         let refresh=pendingRefresh
         pendingRefresh=nil
         if changed || refresh != nil {

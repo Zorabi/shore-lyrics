@@ -10,6 +10,18 @@ import AppKit
         checks+=1
     }
     static func main() throws {
+        let animation=GlyphTextView()
+        var projected=0.25
+        animation.progressProvider={projected}
+        check(!animation.isAnimating,"detached lyric views do not run animation timers")
+        animation.advanceProgress()
+        check(animation.progress==0.25,"native animation samples the projected playback clock")
+        projected=0.75
+        animation.advanceProgress()
+        check(animation.progress==0.75,"native animation advances without a SwiftUI update")
+        animation.progressProvider=nil
+        animation.advanceProgress()
+        check(animation.progress==0.75 && !animation.isAnimating,"pausing removes animation and preserves the last frame")
         let font=NSFont.systemFont(ofSize:28,weight:.semibold)
         let mixed=KaraokeGlyphLayout(text:"Wi岸词",font:font)
         let widths=zip(mixed.boundaries.dropFirst(),mixed.boundaries).map(-)
@@ -33,6 +45,40 @@ import AppKit
             NSGraphicsContext.restoreGraphicsState()
             return bitmap
         }
+        _=NSApplication.shared
+        let nativeWindow=NSWindow(contentRect:NSRect(x:0,y:0,width:640,height:80),styleMask:.borderless,backing:.buffered,defer:false)
+        let native=GlyphTextView(frame:NSRect(x:0,y:0,width:640,height:80))
+        native.wantsLayer=true;native.font=font
+        native.layout=KaraokeGlyphLayout(text:"岸词",font:font)
+        native.color = .white;native.highlight = .systemTeal
+        nativeWindow.contentView=native
+        native.refreshPresentation(rebuild:true)
+        let root=native.layer!.sublayers!.first!
+        let base=root.sublayers![0]
+        let firstImage=base.contents as! CGImage
+        native.progressProvider={0.5};native.advanceProgress()
+        check(base.contents as! CGImage === firstImage,"progress updates reuse cached glyph pixels")
+        check(root.sublayers![1].frame.width>0 && root.sublayers![1].frame.width<640,"native highlight advances using a clipping layer")
+        native.setFrameSize(NSSize(width:320,height:80))
+        check(base.contents as! CGImage !== firstImage,"resizing regenerates glyph pixels at the new size")
+        nativeWindow.contentView=nil
+        check(!native.isAnimating,"detaching a lyric view stops its animation timer")
+
+        for progress:Double? in [nil,0.4] {
+            let bitmap=NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:640,pixelsHigh:80,bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current=NSGraphicsContext(bitmapImageRep:bitmap)
+            let context=NSGraphicsContext.current!.cgContext
+            context.textMatrix=CGAffineTransform(scaleX:1,y:-1)
+            context.textPosition=CGPoint(x:13,y:17)
+            let matrix=context.textMatrix,position=context.textPosition
+            let view=GlyphTextView(frame:NSRect(x:0,y:0,width:640,height:80))
+            view.font=font;view.layout=KaraokeGlyphLayout(text:"岸词",font:font);view.progress=progress
+            view.draw(view.bounds)
+            check(context.textMatrix==matrix && context.textPosition==position,"lyric drawing preserves the surrounding text orientation and position")
+            NSGraphicsContext.restoreGraphicsState()
+        }
+
         let plainFrame=render(nil,glow:false), litFrame=render(0.2,glow:true)
         let pair=KaraokeGlyphLayout(text:"岸词",font:font)
         let edge=(640-pair.width)/2+pair.frontier(progress:0.2).edge

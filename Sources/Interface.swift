@@ -30,6 +30,19 @@ struct OverlayView:View {
     }
 }
 
+private struct PlaybackProgressView:View {
+    @ObservedObject var progress:PlaybackProgress
+    var duration:Double
+    var body:some View {
+        VStack(spacing:6){
+            ProgressView(value:min(1,max(0,progress.displayedPosition/max(1,duration)))).tint(mint)
+                .transaction{$0.animation=nil}
+            HStack{Text(clock(progress.displayedPosition));Spacer();Text(clock(duration))}
+                .font(.system(size:10,design:.monospaced)).foregroundColor(.white.opacity(0.65))
+        }
+    }
+}
+
 private struct SidebarFocusAppearance:ViewModifier {
     @ViewBuilder func body(content:Content)->some View {
         if #available(macOS 14.0,*) {content.focusEffectDisabled()}
@@ -102,11 +115,7 @@ struct SettingsView:View {
                     Text(model.snapshot?.title ?? "从喜欢的一首歌开始").font(.system(size:27,weight:.semibold)).foregroundColor(.white).lineLimit(2)
                     Text([model.snapshot?.artist,model.snapshot?.album].compactMap{$0}.filter{!$0.isEmpty}.joined(separator:"  /  ")).font(.system(size:13)).foregroundColor(.white.opacity(0.65)).lineLimit(1)
                 }
-                VStack(spacing:6){
-                    ProgressView(value:min(1,max(0,model.position/max(1,model.snapshot?.duration ?? 1)))).tint(mint)
-                        .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || model.lyricJumped || model.snapshot?.playing != true ? nil : .linear(duration:0.1),value:model.position)
-                    HStack{Text(clock(model.position));Spacer();Text(clock(model.snapshot?.duration ?? 0))}.font(.system(size:10,design:.monospaced)).foregroundColor(.white.opacity(0.65))
-                }
+                PlaybackProgressView(progress:model.playbackProgress,duration:model.snapshot?.duration ?? 0)
                 Divider().overlay(.white.opacity(0.1))
                 KaraokeText(model:model,color:.white.opacity(0.85),fontSize:21)
                     .frame(maxWidth:.infinity,alignment:.center).padding(.top,2)

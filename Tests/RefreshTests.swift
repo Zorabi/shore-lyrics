@@ -3,6 +3,7 @@
 
 import Foundation
 import AppKit
+import Combine
 
 private final class FakeMonitor:PlaybackMonitoring {
     var onSnapshot:((PlaybackSnapshot)->Void)?
@@ -48,6 +49,53 @@ private final class MockLyricsHTTP:URLProtocol {
     static func defaults()->(UserDefaults,String){let name="local.shorelyrics.tests."+UUID().uuidString;let value=UserDefaults(suiteName:name)!;value.set(true,forKey:"online");value.set(try! JSONEncoder().encode(OnlineLyricsSource.defaults.map{source in var item=source;item.enabled=item.id=="lrclib";return item}),forKey:"onlineSources");return(value,name)}
     static func paused()->PlaybackSnapshot{PlaybackSnapshot(capturedAt:Date().timeIntervalSince1970,playing:false,rate:0,bundle:"test.thirdparty.player",title:"Refresh Song",artist:"Refresh Artist",album:"Test Album",duration:300,position:42)}
     static func main()throws{
+        do{
+            let progress=PlaybackProgress()
+            var notifications=0
+            let subscription=progress.objectWillChange.sink{notifications+=1}
+            progress.updatesEnabled=false
+            progress.position=12
+            check(notifications==0 && progress.position==12,"hidden settings retain the clock without publishing progress")
+            progress.updatesEnabled=true
+            check(notifications==1 && progress.displayedPosition==12,"reopening settings immediately catches up to the current position")
+            withExtendedLifetime(subscription){}
+        }
+        do{
+            let(prefs,name)=defaults()
+            prefs.set(false,forKey:"online")
+            let monitor=FakeMonitor();monitor.next=paused()
+            let model=AppModel(monitor:monitor,defaults:prefs,session:session(),isPlayerRunning:{_ in true})
+            defer{model.stop();prefs.removePersistentDomain(forName:name)}
+            model.start()
+            wait("initial paused lookup completes"){!model.isLoadingLyrics}
+            // Finish the one-time seek flag update before measuring steady state.
+            monitor.refresh()
+            var updates=0
+            let subscription=model.objectWillChange.sink{updates+=1}
+            for _ in 0..<5{
+                monitor.refresh()
+                RunLoop.current.run(until:Date().addingTimeInterval(0.11))
+            }
+            check(updates==0,"paused clock ticks and identical media reports do not invalidate UI")
+            var seek=paused();seek.position=84
+            monitor.onSnapshot?(seek)
+            check(model.position==84 && updates>0,"paused seeking still updates UI immediately")
+            var playing=seek;playing.playing=true;playing.rate=1
+            monitor.onSnapshot?(playing)
+            let start=model.position
+            updates=0
+            RunLoop.current.run(until:Date().addingTimeInterval(0.22))
+            check(model.position>start,"playback clock resumes after pause")
+            check(updates==0,"playing progress does not invalidate metadata and settings views")
+            var advanced=playing;advanced.capturedAt=Date().timeIntervalSince1970;advanced.position=model.position
+            monitor.onSnapshot?(advanced)
+            check(updates==0,"media clock reports do not invalidate unchanged track metadata")
+            model.document=LyricsParser.parse("[00:00]第一句\n[01:30]第二句",source:"test")
+            updates=0
+            model.position=91
+            check(updates>0 && model.currentIndex==1,"line changes still notify lyric views immediately")
+            withExtendedLifetime(subscription){}
+        }
         do{
             let(prefs,name)=defaults()
             let model=AppModel(monitor:FakeMonitor(),defaults:prefs,session:session())
